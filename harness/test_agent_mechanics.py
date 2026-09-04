@@ -7,6 +7,8 @@ Covers:
 """
 from __future__ import annotations
 
+import difflib
+import json
 import sys
 from pathlib import Path
 
@@ -102,7 +104,8 @@ def test_blueprints_have_paper_structure():
         for section in ("GOAL:", "INFORMATION", "DECISION CRITERIA:", "PLAN:"):
             assert section in bp, f"{kind} missing {section}"
         # compactness: blueprint ships in every request -> keep bounded
-        assert len(bp) < 1600, f"{kind} blueprint too long: {len(bp)}"
+        # (round-2 practices added ~150 chars of evidence/anti-merge rules)
+        assert len(bp) < 1700, f"{kind} blueprint too long: {len(bp)}"
 
 
 def test_build_system_prompt_contains_blueprint():
@@ -119,3 +122,66 @@ def test_repair_prompt_renders_attribution():
     )
     assert "ERROR TYPE: format" in msg
     assert "findings" in msg
+
+
+# ---------------------------------------------------------------- round-2 mechanics
+
+def test_json_closer_truncated_variants():
+    jc = sa.json_closer
+    # truncated mid-object in array
+    assert json.loads(jc('{"findings": [{"file": "a.py", "vuln": "sqli"}'))["findings"][0]["file"] == "a.py"
+    # truncated mid-string
+    out = json.loads(jc('{"findings": [{"note": "sqli trigg'))
+    assert isinstance(out, dict)
+    # trailing comma
+    assert json.loads(jc('{"findings": [1, 2,')) == {"findings": [1, 2]}
+    # dangling key separator
+    assert json.loads(jc('{"findings": [1], "scan_time":')) == {"findings": [1], "scan_time": None}
+    # complete doc stays complete
+    assert jc('{"findings": [1]}') == '{"findings": [1]}'
+    # escaped quote inside string
+    assert isinstance(json.loads(jc('{"a": "x\\"')), dict)
+    # deeply nested truncation
+    deep = '{"a": {"b": [1, {"c": "val'
+    assert isinstance(json.loads(jc(deep)), dict)
+
+
+def test_deliverable_health_grading(tmp_path):
+    workdir = tmp_path
+    p = workdir / "security_report.json"
+    # health 2: verifier-clean
+    p.write_text(json.dumps({"findings": [{"file": "f", "vuln_type": "sqli", "line": 3}]}))
+    assert sa.deliverable_health("audit", str(p), workdir) == 2
+    # health 1: parseable JSON but not verifier-clean
+    p.write_text(json.dumps({"other": 1}))
+    assert sa.deliverable_health("audit", str(p), workdir) == 1
+    # health 0: garbage
+    p.write_text('{"findings": [')
+    assert sa.deliverable_health("audit", str(p), workdir) == 0
+    # forensics: format-clean key=value -> full verifier passes (health 2)
+    f = workdir / "incident_report.txt"
+    f.write_text("source_ip=1.2.3.4\ntotal_events=87")
+    assert sa.deliverable_health("forensics", str(f), workdir) == 2
+    # health 1: key=value-shaped but violates a verifier constraint (single line)
+    f.write_text("source_ip=1.2.3.4")
+    assert sa.deliverable_health("forensics", str(f), workdir) == 1
+
+
+def test_tool_alias_mapping():
+    assert sa.TOOL_ALIASES["list_files"] == "list_dir"
+    assert sa.TOOL_ALIASES["run_tests"] == "run_pytest"
+    # fuzzy fallback resolves near-misses
+    assert difflib.get_close_matches("read_fil", list(sa.TOOL_FUNCS), n=1, cutoff=0.6)[0] == "read_file"
+
+
+def test_round2_practices_in_prompts():
+    # injection guard (2605.14290) + span carrying (2604.02460) in common prompt
+    common = sa.SYSTEM_COMMON
+    assert "DATA" in common and "untrusted" in common
+    assert "VERBATIM" in common
+    # notes-to-file + anti-merge in audit (2608.03591 / 2604.20179)
+    audit = sa.WORKFLOWS["audit"]
+    assert ".findings.md" in audit and "One finding per distinct sink" in audit
+    # hunteragent evidence rules in forensics (2605.29269)
+    forensics = sa.WORKFLOWS["forensics"]
+    assert "grep -c" in forensics and "monoton" in forensics and "wtmp" in forensics
