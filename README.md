@@ -2,7 +2,7 @@
 
 Универсальный LLM-агент для соревнования [SecureIntelligent/UniversalAgenticCompetitionPublic](https://github.com/SecureIntelligent/UniversalAgenticCompetitionPublic): аудита уязвимостей, SWE-стиль исправлений, цифровой форензики и CTF-задач на **малых локальных LLM** (qwen3.6-27b и близких), без интернета, с ограниченным бюджетом запросов.
 
-**Английское резюме:** This repo contains a competition-ready cybersecurity agent (`submission/`), 3 runnable + 12 specced synthetic tasks simulating the private task set (MITRE ATT&CK + OWASP Top 10:2025), a local validation harness, and a research digest of 14 AlphaXiv papers that shaped the design. See `docs/` for details.
+**Английское резюме:** This repo contains a competition-ready cybersecurity agent (`submission/`), 3 runnable + 12 specced synthetic tasks simulating the private task set (MITRE ATT&CK + OWASP Top 10:2025), a local validation harness, and a research digest of 17 AlphaXiv papers that shaped the design. See `docs/` for details.
 
 ## Структура
 
@@ -40,4 +40,4 @@ python3 submission/sec_agent.py "Create a file at /app/hello.txt whose entire co
 | Response-normalizing транспорт | чинит валидацию pydantic-ai 1.x против Groq/нестандартных OpenAI-совместимых серверов |
 | replace_in_file вместо unified diff | малые модели надёжно копируют контекст, чем генерят диффы |
 
-Подробности: `docs/architecture.md`, `docs/research.md`.
+Подробности: `docs/architecture.md`, `docs/research.md`, `docs/papers.md`.

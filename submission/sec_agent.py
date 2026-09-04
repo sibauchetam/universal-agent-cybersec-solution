@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Universal cybersecurity agent for Universal Agent Competition.
 
-Design (research-backed, see repo docs/research.md):
+Design (research-backed, see repo docs/research.md and docs/papers.md):
 - SDK-first: pydantic-ai 1.x tool loop, raw openai-SDK fallback loop.
 - Mechanical task classification + trivial fast-path (0 requests).
 - replace_in_file as primary patching tool (unified diffs are unreliable for small models).
 - Typed pytest feedback (error_type/expected/actual/location) instead of raw tracebacks.
 - External-oracle self-verification of the deliverable + repair loop before finishing.
+- Per-category BLUEPRINT prompts (GOAL/INFO/CRITERIA/PLAN) - arXiv 2506.08669 showed
+  small models follow explicit step-by-step blueprints far better than free-form CoT.
+- Mechanical repetition guard: fingerprint (tool, args, output); repeated identical
+  results inject a loop-break instruction WITHOUT extra LLM calls - arXiv 2604.25039
+  rejection-cache analogue for tight token budgets.
+- Error attribution before repair (missing|format|content) with targeted hints -
+  arXiv 2607.05199 typed-error feedback reduced execution errors by up to 33%.
 - Strict token/time budgets; serial requests only.
 
 Env interface (set by Harbor wrapper):
@@ -14,12 +21,13 @@ Env interface (set by Harbor wrapper):
 Optional:
   SEC_AGENT_MAX_REQUESTS (default 45), SEC_AGENT_TIME_BUDGET (default 540s),
   SEC_AGENT_PROXY_URL (httpx proxy for testing), SEC_AGENT_WORKDIR,
-  SEC_AGENT_TOOL_OUTPUT_CHARS (7000), SEC_AGENT_CMD_TIMEOUT (90s)
+  SEC_AGENT_TOOL_OUTPUT_CHARS (4000), SEC_AGENT_CMD_TIMEOUT (90s)
 """
 from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import json
 import logging
 import os
@@ -57,7 +65,7 @@ PROXY = _env("SEC_AGENT_PROXY_URL") or _env("AGENT_PROXY_URL")
 MAX_REQUESTS = int(_env("SEC_AGENT_MAX_REQUESTS", "45") or 45)
 TIME_BUDGET = float(_env("SEC_AGENT_TIME_BUDGET", "540") or 540)
 CMD_TIMEOUT = int(_env("SEC_AGENT_CMD_TIMEOUT", "90") or 90)
-TOOL_CHARS = int(_env("SEC_AGENT_TOOL_OUTPUT_CHARS", "7000") or 7000)
+TOOL_CHARS = int(_env("SEC_AGENT_TOOL_OUTPUT_CHARS", "4000") or 4000)
 TEMPERATURE = float(_env("SEC_AGENT_TEMPERATURE", "0.2") or 0.2)
 MAX_TOKENS = int(_env("SEC_AGENT_MAX_TOKENS", "8192") or 8192)
 REASONING_EFFORT = _env("SEC_AGENT_REASONING_EFFORT")  # e.g. "none" to suppress qwen thinking
@@ -130,6 +138,9 @@ class AgentState:
     def __post_init__(self) -> None:
         if self.notes is None:
             self.notes = {}
+        # Repetition-guard ledger: (tool, args-fingerprint) -> [output fingerprints]
+        self.call_history: dict[str, list[str]] = {}
+        self.loop_strikes: int = 0
 
 
 def remap_path(p: Path) -> Path:
@@ -144,6 +155,46 @@ def _resolve_path(path: str, state: AgentState) -> Path:
     if not p.is_absolute():
         p = state.workdir / p
     return remap_path(p.resolve())
+
+
+def _fp(text: str) -> str:
+    """Normalized fingerprint of a string (whitespace-collapsed sha1 prefix)."""
+    return hashlib.sha1(" ".join(text.split()).encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def repetition_guard(state: AgentState, tool: str, args_repr: str, result: str) -> str:
+    """Mechanical loop detector (rejection-cache analogue, arXiv 2604.25039).
+
+    Tracks (tool, normalized args) -> output fingerprints. When the same call keeps
+    returning the same output, inject a mechanical loop-break instruction instead of
+    silently feeding the loop back to the model: saves LLM turns and forces an
+    approach change without spending the request budget. Legitimate repeats (e.g.
+    re-reading a file AFTER an edit) produce a different output hash and pass freely.
+    """
+    key = f"{tool}:{_fp(args_repr)}"
+    h = _fp(result)
+    seen = state.call_history.setdefault(key, [])
+    identical = sum(1 for x in seen if x == h)
+    seen.append(h)
+    if identical < 2:
+        return result
+    state.loop_strikes += 1
+    notice = (
+        f"REPETITION GUARD: this exact {tool} call already returned identical output "
+        f"{identical + 1} times. Repeating it cannot produce new information. "
+    )
+    if state.loop_strikes >= 3:
+        notice += (
+            "You are stuck in a loop. STOP exploring: decide the final deliverable "
+            "content from the evidence you already have, write it with write_file, "
+            "and finish."
+        )
+    else:
+        notice += (
+            "Change something material: (a) run a DIFFERENT command/approach, "
+            "(b) edit the files first, then re-check, or (c) move to writing the deliverable."
+        )
+    return _trunc(f"{result}\n\n[{notice}]")
 
 
 async def _subprocess(command: str, cwd: Path | None, timeout: int) -> tuple[int, str]:
@@ -180,10 +231,10 @@ async def _subprocess(command: str, cwd: Path | None, timeout: int) -> tuple[int
 async def tool_bash(state: AgentState, command: str) -> str:
     state.tool_calls += 1
     code, text = await _subprocess(command, state.workdir, CMD_TIMEOUT)
-    return _trunc(f"[exit {code}] $ {command}\n{text}")
+    return repetition_guard(state, "bash", command, _trunc(f"[exit {code}] $ {command}\n{text}"))
 
 
-async def tool_read_file(state: AgentState, path: str, start_line: int = 1, max_lines: int = 400) -> str:
+async def tool_read_file(state: AgentState, path: str, start_line: int = 1, max_lines: int = 250) -> str:
     state.tool_calls += 1
     fp = _resolve_path(path, state)
     if not fp.is_file():
@@ -198,13 +249,16 @@ async def tool_read_file(state: AgentState, path: str, start_line: int = 1, max_
         return f"ERROR reading {fp}: {exc!r}"
     total = len(lines)
     start_line = max(1, int(start_line))
-    max_lines = max(10, min(int(max_lines), 800))
+    max_lines = max(10, min(int(max_lines), 600))
     chunk = lines[start_line - 1 : start_line - 1 + max_lines]
     numbered = "\n".join(f"{i + start_line:>5}| {ln}" for i, ln in enumerate(chunk))
     more = ""
     if start_line - 1 + max_lines < total:
         more = f"\n... [{total - (start_line - 1 + max_lines)} more lines; call with start_line={start_line + max_lines}]"
-    return _trunc(f"[{fp} | {total} lines]\n{numbered}{more}")
+    return repetition_guard(
+        state, "read_file", f"{path}|{start_line}|{max_lines}",
+        _trunc(f"[{fp} | {total} lines]\n{numbered}{more}"),
+    )
 
 
 async def tool_write_file(state: AgentState, path: str, content: str) -> str:
@@ -292,7 +346,7 @@ async def tool_list_dir(state: AgentState, path: str = ".") -> str:
         f"-not -path '*/.venv*' | head -200"
     )
     code, text = await _subprocess(cmd, None, 30)
-    return _trunc(f"[tree {root}]\n{text}")
+    return repetition_guard(state, "list_dir", str(root), _trunc(f"[tree {root}]\n{text}"))
 
 
 async def tool_grep(state: AgentState, pattern: str, path: str = ".", glob: str = "", case_insensitive: bool = False) -> str:
@@ -312,7 +366,10 @@ async def tool_grep(state: AgentState, pattern: str, path: str = ".", glob: str 
             cmd += f" --include={shlex.quote(glob)}"
         cmd += " | head -120"
     code, text = await _subprocess(cmd, None, 30)
-    return _trunc(f"[grep '{pattern}' in {root} | exit {code}]\n{text}")
+    return repetition_guard(
+        state, "grep", f"{pattern}|{root}|{glob}|{case_insensitive}",
+        _trunc(f"[grep '{pattern}' in {root} | exit {code}]\n{text}"),
+    )
 
 
 def parse_pytest_feedback(raw: str) -> str:
@@ -347,7 +404,7 @@ async def tool_run_pytest(state: AgentState, paths: str = "tests/") -> str:
     args = paths or "tests/"
     cmd = f"python3 -m pytest {args} -q --tb=short -p no:cacheprovider 2>&1 | tail -80"
     code, text = await _subprocess(cmd, state.workdir, min(CMD_TIMEOUT, 180))
-    return _trunc(parse_pytest_feedback(text), 6000)
+    return repetition_guard(state, "run_pytest", args, _trunc(parse_pytest_feedback(text), 6000))
 
 
 # Tool registry: name -> (json_schema, coroutine(state, **kwargs))
@@ -525,46 +582,111 @@ Operating rules:
 - Finish by writing the deliverable, then reply with a short summary (<=120 words). Do not print the file content in your final reply."""
 
 
+# BLUEPRINT prompt structure (arXiv 2506.08669): small models follow explicit
+# "GOAL -> INFORMATION -> DECISION CRITERIA -> PLAN" guides far better than
+# free-form CoT. Each blueprint stays compact (~150 words) because it ships in
+# every system prompt of the run.
 WORKFLOWS: dict[str, str] = {
-    "audit": """WORKFLOW for security audit (bug-bounty style JSON report):
-1. list_dir to map the codebase; grep for dangerous sinks: "execute(", "fetchrow(", "f\"", "eval(", "exec(", "subprocess", "os.system", "pickle", "yaml.load", "md5", "sha1", "jwt.decode", "redirect(", "requests.get(".
-2. read_file every candidate location plus its imports/models to confirm reachability and attacker-controlled dataflow (source -> sink). Read auth/db/routers files fully if small.
-3. For each CONFIRMED issue record: exact file + function/endpoint, a verbatim code snippet as evidence, realistic impact, concrete fix (e.g. parameterized query).
-4. Write the deliverable JSON exactly as the instruction specifies. Include the most critical finding with full detail; add other confirmed findings. Severity must be one of critical|high|medium|low|informational.
-5. Double-check the report is valid JSON and mentions the exact endpoint/function names from the code.""",
-    "fix": """WORKFLOW for vulnerability fixing (keep functionality green):
-1. run_pytest FIRST to capture the baseline (before any edit).
-2. grep sinks and read the vulnerable code paths. Identify the minimal correct fix.
-3. Apply fixes with replace_in_file. Standard fixes: parameterize SQL queries (db.fetch(query, param)), sanitize/avoid shell (shlex.join, subprocess without shell=True), validate/authorize object ownership, replace weak crypto, restrict deserialization.
-4. run_pytest again - all tests MUST pass. If a test fails, read the typed feedback (failed_tests, error_types_found) and fix precisely; loop until green.
-5. Do not rename public functions/models or change response schemas. Do not add dependencies.""",
-    "forensics": """WORKFLOW for log forensics:
-1. list_dir the artifacts directory; read_file EVERY artifact fully (they are small). Do not sample - decisive fields hide in any file.
-2. Build a timeline. Correlate identities across sources: proxy XFF IPs <-> app audit subjects <-> auth log users. Watch for: truncated/recovered files, split log shards, decoy IPs and red herrings.
-3. Compute each required field exactly as the instruction maps it (e.g. payload_logical_bytes if present else bytes; verbatim ISO timestamp including fractional seconds).
-4. Write the deliverable in the EXACT format: one key=value per line, no spaces around '=', no blank lines, no comments, no extra keys. Numbers without quotes/commas.
-5. Re-read your deliverable and diff it mentally against the instruction checklist before finishing.""",
-    "ctf": """WORKFLOW for CTF-style tasks:
-1. Recon: list_dir, then bash with `find . -type f | head -50`, `file` on interesting files.
-2. Hunt flags: grep for "flag{", "FLAG", "ctf{", also check env vars, git log/history, archive contents (unzip -l, tar -tzf), encoded blobs (base64 -d, strings, xxd), layered encodings.
-3. Beware DECOY flags: a file literally named flag.txt may contain a fake flag; the real one may be split across chunks, hidden in metadata, or assembled from pieces. Verify the flag matches the exact format the instruction requests.
-4. Write the deliverable exactly as instructed and re-verify its content.""",
-    "generic": """WORKFLOW (generic):
-1. list_dir + read key files to understand what is asked.
-2. Identify the concrete deliverable (file path + format) from the instruction.
-3. Do the work with tools; verify with external oracles where possible (pytest, running services, JSON parsing).
-4. Write the deliverable and double-check its format against the instruction.""",
+    "audit": """BLUEPRINT - security audit (bug-bounty style JSON report):
+GOAL: a JSON report whose findings match the verifier's signal set for the injected vulnerabilities.
+INFORMATION: entrypoints/routers; DB and auth modules; dangerous sinks (execute(, fetchrow(, f\"-interpolation, eval(, subprocess, os.system, pickle, yaml.load, md5/sha1, jwt.decode, redirect(, requests.get() with user input.
+DECISION CRITERIA: report a finding ONLY with confirmed source->sink dataflow (attacker-controlled input reaches the sink); verbatim code as evidence; severity critical|high|medium|low|informational.
+PLAN:
+1. list_dir to map the codebase; grep the sinks above.
+2. read_file every candidate site + its imports/models to confirm reachability.
+3. Record file+function/endpoint, evidence snippet, impact, concrete fix (e.g. parameterized query).
+4. Write the deliverable JSON EXACTLY as the instruction specifies; never invent extra keys.
+5. Validate: report parses as JSON and names the exact endpoint/function identifiers from the code.""",
+    "fix": """BLUEPRINT - vulnerability fix (keep functionality green):
+GOAL: minimal secure fix; ALL tests pass; public APIs unchanged.
+INFORMATION: baseline pytest result; vulnerable code paths (grep sinks); how tests call the code.
+DECISION CRITERIA: fix removes the vulnerability AND keeps behavior contracts (routes, schemas, function names); no new dependencies.
+PLAN:
+1. run_pytest FIRST to capture the baseline before any edit.
+2. grep sinks; read the vulnerable paths; identify the minimal correct fix.
+3. Apply with replace_in_file. Standard fixes: parameterize SQL (db.fetch(query, param)); no shell=True / shlex.join; authorize object ownership; strong crypto; safe deserialization.
+4. run_pytest again - MUST be green. Read typed feedback (failed_tests, error_types_found) and fix precisely; loop until green.
+5. Never rename public functions/models or change response schemas.""",
+    "forensics": """BLUEPRINT - log forensics (key=value incident report):
+GOAL: every required field exactly as the instruction maps it, in the exact line format.
+INFORMATION: EVERY artifact in the incidents directory - read fully, do not sample; decisive fields hide in any file.
+DECISION CRITERIA: a value is final only when corroborated across sources (proxy XFF IPs <-> app audit subjects <-> auth users); expect truncated/recovered files, split shards, decoy IPs.
+PLAN:
+1. list_dir the artifacts; read_file EVERY one fully.
+2. Build a timeline; correlate identities across sources; mark red herrings.
+3. Compute each field per the instruction mapping (e.g. payload_logical_bytes if present else bytes; verbatim ISO timestamps incl. fractional seconds).
+4. Write deliverable: one key=value per line, no spaces around '=', no blank lines/comments/extra keys, numbers unquoted.
+5. Re-read the deliverable; diff it against the instruction checklist field by field.""",
+    "ctf": """BLUEPRINT - CTF flag hunt:
+GOAL: the REAL flag in the exact requested format written to the deliverable.
+INFORMATION: full file listing (find . -type f); file types; archives; git history; env vars; encoded blobs.
+DECISION CRITERIA: files literally named flag.txt are often DECOYS; the real flag may be split across chunks, hidden in metadata, or layered-encoded; verify format flag{...} as instructed.
+PLAN:
+1. Recon: list_dir; bash find; file on interesting entries.
+2. grep for flag{|FLAG|ctf{; check env, git log/history, unzip -l/tar -tzf, base64 -d, strings, xxd.
+3. Assemble/decode layers until a flag matching the requested format is confirmed.
+4. Write the deliverable exactly as instructed; re-verify its content.""",
+    "generic": """BLUEPRINT - generic task:
+GOAL: the concrete deliverable (path + format) named by the instruction.
+INFORMATION: workspace listing; key files; any runnable oracles (tests, services).
+DECISION CRITERIA: deliverable is correct only if verified by an external oracle or explicit evidence.
+PLAN:
+1. list_dir + read key files.
+2. Identify deliverable path + exact format from the instruction.
+3. Do the work with tools; verify with oracles (pytest, curl, JSON parse).
+4. Write the deliverable; double-check format against the instruction.""",
 }
 
 CRITIC_PROMPT = """CRITIC PASS. Review your deliverable now, as a hostile external verifier would:
 1. Re-read the instruction: deliverable path, exact format, required keys, field mappings.
 2. Read the deliverable file. Check: correct path? valid JSON / exact line format? all required keys present exactly once? values plausible and consistent with evidence you saw?
-3. If anything is off, fix it with tools immediately.
+3. If values look wrong, attribute the error FIRST, then fix accordingly: (a) misread instruction -> re-check format/mapping rules; (b) wrong artifact source -> re-check the evidence you gathered; (c) arithmetic/count mistake -> recompute mechanically (python3/awk).
+4. Fix any issue with tools immediately.
 If everything is correct, reply with the single word: OK"""
 
 REPAIR_PROMPT = """Your deliverable failed mechanical verification:
 {reason}
+ERROR TYPE: {err_type}
+{err_hint}
 Fix the deliverable NOW using tools (read it, correct it, write it). Then reply with a one-line confirmation."""
+
+
+# Error attribution for repair (arXiv 2607.05199: typed feedback on the error class,
+# not raw messages, cut execution errors by up to 33% for small models).
+def attribute_error(kind: str, reason: str) -> str:
+    low = reason.lower()
+    if "missing" in low or "no deliverable" in low or "unreadable" in low:
+        return "missing"
+    if re.search(r"expected .+ got ", low):  # count/arity mismatch -> wrong values
+        return "content"
+    if "json" in low or "format" in low or "duplicate" in low or "violates" in low or "spaces around" in low:
+        return "format"
+    return "content"
+
+
+def repair_hint(kind: str, err_type: str) -> str:
+    if err_type == "missing":
+        return (
+            "The deliverable does not exist yet. Create it NOW with write_file at the exact "
+            "path above. Derive the content from the instruction and the artifacts you already "
+            "read; if evidence is thin, still write the file in the exact required format with "
+            "your best evidence-based values - an empty/absent file scores zero."
+        )
+    if err_type == "format":
+        fmt = {
+            "audit": 'a single JSON object with non-empty "findings" array; no markdown fences, no extra top-level keys',
+            "forensics": "one key=value per line, no spaces around '=', no duplicate keys, no blank lines/comments, 2..12 lines, numbers unquoted",
+            "ctf": "non-empty flag text in the exact format the instruction requests",
+        }.get(kind, "the exact structure the instruction specifies")
+        return (
+            "The file exists but its STRUCTURE is wrong. Rewrite it to: "
+            f"{fmt}. Never add keys/lines/decorations the instruction did not request."
+        )
+    return (
+        "Structure is fine but values look wrong. Re-map each required field to its exact "
+        "source artifact (verbatim timestamps; logical-bytes vs raw bytes as the instruction "
+        "specifies; counts recomputed with python3/awk - not estimated), then rewrite the file."
+    )
 
 
 def build_system_prompt(kind: str) -> str:
@@ -573,7 +695,7 @@ def build_system_prompt(kind: str) -> str:
 
 def build_first_message(instruction: str, kind: str, workdir: Path, baseline: str) -> str:
     parts = [f"TASK INSTRUCTION:\n{instruction}"]
-    code, text = _run_sync_quiet(f"find {shlex.quote(str(workdir))} -maxdepth 2 -not -path '*/.git*' -not -path '*/__pycache__*' -not -path '*/.venv*' -type f | head -60; echo '---'; du -sh {shlex.quote(str(workdir))} 2>/dev/null")
+    code, text = _run_sync_quiet(f"find {shlex.quote(str(workdir))} -maxdepth 2 -not -path '*/.git*' -not -path '*/__pycache__*' -not -path '*/.venv*' -type f | head -40; echo '---'; du -sh {shlex.quote(str(workdir))} 2>/dev/null")
     parts.append(f"\nWORKSPACE SNAPSHOT ({workdir}):\n{text}")
     if baseline:
         parts.append(f"\nBASELINE TEST RESULT (before any edits):\n{baseline}")
@@ -669,6 +791,21 @@ def _make_http_client() -> Any:
             REQUEST_COUNT += 1
             if REQUEST_COUNT % 10 == 0:
                 _log("llm_requests", n=REQUEST_COUNT)
+            # input-size telemetry: per-role char counts of the outgoing payload
+            try:
+                body = json.loads(request.content)
+                msgs = body.get("messages", []) if isinstance(body, dict) else []
+                per_role: dict[str, int] = {}
+                for m in msgs:
+                    if not isinstance(m, dict):
+                        continue
+                    c = m.get("content")
+                    if not isinstance(c, str):
+                        c = json.dumps(m.get("tool_calls") or c or "", ensure_ascii=False)
+                    per_role[m.get("role", "?")] = per_role.get(m.get("role", "?"), 0) + len(c)
+                _log("req_size", n_msgs=len(msgs), chars=per_role)
+            except Exception:
+                pass
             rpd_cap = int(_env("SEC_AGENT_RPD_CAP", "1000") or 1000)
             if REQUEST_COUNT > rpd_cap:
                 raise httpx.TransportError(f"RPD cap {rpd_cap} reached")
@@ -738,9 +875,10 @@ def _make_model() -> Any:
     return OpenAIChatModel(MODEL_NAME, provider=OpenAIProvider(openai_client=_make_openai_client()))
 
 
-def make_history_compactor(keep_last_returns: int = 3, max_return_chars: int = 1100, max_text_chars: int = 900) -> Any:
+def make_history_compactor(keep_last_returns: int = 2, max_return_chars: int = 600, max_text_chars: int = 400) -> Any:
     """pydantic-ai history processor: elides older tool outputs / assistant text so
-    per-request input tokens stay bounded on long tasks (ACM paper: -20% tokens)."""
+    per-request input tokens stay bounded on long tasks (ACM paper: -20% tokens).
+    Defaults sized for ~7k-token ITPM ceilings seen on free inference tiers."""
     from pydantic_ai.messages import ModelRequest, ModelResponse, ToolReturnPart, TextPart
 
     def _shorten(content: Any, marker: str) -> str:
@@ -771,7 +909,7 @@ def make_history_compactor(keep_last_returns: int = 3, max_return_chars: int = 1
                                 )
                         elif isinstance(part, TextPart) and isinstance(msg, ModelResponse):
                             seen_responses_here = seen_responses
-                            if len(messages) - i > 2 and part.content and len(part.content) > max_text_chars:
+                            if len(messages) - i > 1 and part.content and len(part.content) > max_text_chars:
                                 part.content = part.content[:max_text_chars] + "\n... [earlier reasoning elided]"
                     except Exception:
                         pass
@@ -797,6 +935,7 @@ async def run_pyai_loop(
     state: AgentState,
     request_budget: int,
     baseline: str,
+    compactor_kwargs: dict[str, int] | None = None,
 ) -> str:
     from pydantic_ai import Agent, UsageLimits
     from pydantic_ai.models.openai import OpenAIChatModelSettings
@@ -808,7 +947,7 @@ async def run_pyai_loop(
         retries=2,
         system_prompt=build_system_prompt(kind),
         model_settings=_model_settings(),
-        history_processors=[make_history_compactor()],
+        history_processors=[make_history_compactor(**(compactor_kwargs or {}))],
     )
 
     # Explicit signatures: pydantic-ai derives tool schemas from type hints,
@@ -821,7 +960,7 @@ async def run_pyai_loop(
         return await tool_bash(state, command)
 
     @agent.tool_plain(retries=2)
-    async def read_file(path: str, start_line: int = 1, max_lines: int = 400) -> str:
+    async def read_file(path: str, start_line: int = 1, max_lines: int = 250) -> str:
         """Read a text file with line numbers. Supports start_line/max_lines for big files."""
         return await tool_read_file(state, path, start_line, max_lines)
 
@@ -871,6 +1010,33 @@ async def run_pyai_loop(
 # --------------------------------------------------------------------------- #
 
 
+def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    # ~4 chars/token heuristic, good enough for ITPM headroom checks.
+    total = 0
+    for m in messages:
+        content = m.get("content") or ""
+        if isinstance(content, list):  # tool-call blocks
+            content = json.dumps(content, ensure_ascii=False)
+        total += len(str(content)) // 4 + 8
+    return total
+
+
+def _shrink_history(messages: list[dict[str, Any]]) -> None:
+    """Mechanical compaction for the fallback loop: keeps the last 3 tool results
+    verbatim, truncates older ones, so ITPM ceilings (~7k on free tiers) hold."""
+    tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    for i in tool_idx[:-3]:
+        c = messages[i].get("content") or ""
+        if isinstance(c, str) and len(c) > 500:
+            messages[i]["content"] = c[:500] + "\n... [older tool output truncated]"
+    # also cap very old assistant reasoning
+    asst_idx = [i for i, m in enumerate(messages) if m.get("role") == "assistant"]
+    for i in asst_idx[:-2]:
+        c = messages[i].get("content") or ""
+        if isinstance(c, str) and len(c) > 600:
+            messages[i]["content"] = c[:600] + "\n... [earlier reasoning truncated]"
+
+
 async def run_openai_fallback(
     instruction: str,
     kind: str,
@@ -891,6 +1057,7 @@ async def run_openai_fallback(
     for _ in range(request_budget):
         if time_left() <= 20:
             break
+        _shrink_history(messages)
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
@@ -978,9 +1145,10 @@ async def ensure_deliverable(instruction: str, kind: str, state: AgentState, del
     if budget_left <= 0 or time_left() <= 30:
         return False
     _log("repair_needed", reason=reason)
+    err_type = attribute_error(kind, reason)
     repair_instruction = (
-        REPAIR_PROMPT.format(reason=reason)
-        + f"\nDeliverable path: {deliverable}\n\nTASK INSTRUCTION (for reference):\n{instruction[:4000]}"
+        REPAIR_PROMPT.format(reason=reason, err_type=err_type, err_hint=repair_hint(kind, err_type))
+        + f"\nDeliverable path: {deliverable}\n\nTASK INSTRUCTION (for reference):\n{instruction[:2500]}"
     )
     try:
         await run_pyai_loop(repair_instruction, kind, state, min(6, budget_left), "")
@@ -1012,6 +1180,15 @@ def _is_daily_cap(exc: Exception) -> bool:
     text = repr(exc)
     return ("per day" in text or "TPD" in text or "daily" in text
             or "requests per day" in text or "RPD" in text)
+
+
+def _is_input_token_limit(exc: Exception) -> bool:
+    """413 ITPM: too much context in one request. Wait for the minute window and
+    retry with aggressive history compaction (workspace state is preserved, so a
+    fresh loop re-orients from the snapshot)."""
+    text = repr(exc)
+    return ("413" in text or "Request too large" in text
+            or "input tokens per minute" in text)
 
 
 async def main_async(instruction: str) -> str:
@@ -1048,12 +1225,17 @@ async def main_async(instruction: str) -> str:
     baseline = run_baseline_tests() if kind == "fix" else ""
 
     # 3) main loop (per-minute rate limits get patient retry; daily caps fail fast;
-    #    other errors -> fallback loop)
+    #    413 ITPM -> pause + aggressive compaction; other errors -> fallback loop)
     budget_main = MAX_REQUESTS - requests_used
     final = ""
-    for attempt in range(3):
+    aggressive = False
+    for attempt in range(4):
         try:
-            final = await run_pyai_loop(instruction, kind, state, budget_main, baseline)
+            final = await run_pyai_loop(
+                instruction, kind, state, budget_main, baseline,
+                compactor_kwargs={"keep_last_returns": 2, "max_return_chars": 700, "max_text_chars": 500}
+                if aggressive else None,
+            )
             break
         except Exception as exc:
             _log("primary_loop_failed", error=repr(exc), attempt=attempt)
@@ -1063,6 +1245,11 @@ async def main_async(instruction: str) -> str:
             if _is_daily_cap(exc):
                 _log("daily_cap_hit", note="fail fast; switch API key to continue")
                 break
+            if _is_input_token_limit(exc) and time_left() > 140 and attempt < 3:
+                _log("itpm_retry", note="413: pausing 65s, restarting with aggressive compaction")
+                aggressive = True
+                await asyncio.sleep(min(65.0, max(20.0, time_left() - 120)))
+                continue
             conn_error = ("Connection error" in repr(exc) or "ProxyError" in repr(exc)
                           or "ConnectError" in repr(exc))
             if conn_error and time_left() > 120:
