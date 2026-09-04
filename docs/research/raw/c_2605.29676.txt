@@ -1,0 +1,129 @@
+CONNECTED: {'name': 'alphaxiv-assistant', 'version': '1.0.0'} session: None
+## Detailed Research Report: Notation Matters: A Benchmark Study of Token-Optimized Formats in Agentic AI Systems
+
+### 1. Authors and Institution(s)
+
+The research paper "Notation Matters: A Benchmark Study of Token-Optimized Formats in Agentic AI Systems" was authored by Lorenz Kutschka and Bernhard C. Geiger.
+*   **Lorenz Kutschka** is affiliated with Know Center Research GmbH in Graz, Austria.
+*   **Bernhard C. Geiger** is affiliated with Know Center Research GmbH, Signal Processing and Speech Communication at Graz University of Technology, and the Graz Center for Machine Learning, all in Graz, Austria.
+
+### 2. How This Work Fits into the Broader Research Landscape
+
+The integration of Large Language Models (LLMs) into Agentic AI systems necessitates the exchange of structured data, encompassing tool descriptions, execution results, and tool invocations. The efficiency of this data exchange, particularly in terms of token consumption, directly impacts inference costs, energy efficiency, and the practical feasibility of such systems within context window limits.
+
+Currently, JSON (JavaScript Object Notation) serves as the default format for this structured data due to its widespread adoption and LLMs' extensive exposure to it during training. However, JSON was designed for application-to-application interchange, not for token efficiency. Its structural elements, such as quotation marks, commas, and braces, introduce token overhead when processed by LLMs.
+
+In response to this inefficiency, several token-optimized alternatives have been proposed. Notable examples include TOON (Token-Oriented Object Notation) and TRON (Token Reduced Object Notation), as well as other formats like JTON, ONTO, TSLN, and TOKON, which target specific data types or apply different compression strategies. Prior evaluations of these formats, particularly TOON, have focused on isolated comprehension or generation tasks, demonstrating reduced byte size or token counts and sometimes indicating accuracy trade-offs that vary with model size and pre-training exposure. However, these earlier studies did not systematically assess the performance of these formats within the complete, multi-turn agentic loops that characterize real-world tool-augmented LLM systems. Specifically, there has been a gap in understanding whether the observed token reductions persist, and how accuracy is affected, when formats are used for both input (schemas, results) and output (tool calls) within an iterative agentic workflow.
+
+This study addresses this gap by conducting a systematic evaluation of TOON and TRON within end-to-end agentic pipelines. It distinguishes itself by decoupling input and output compression, utilizing four diverse agentic benchmarks, and assessing five open-weight LLMs, thereby providing insights into the practical utility and limitations of these token-optimized formats in complex agentic scenarios.
+
+### 3. Key Objectives and Motivation
+
+The primary motivation for this research stems from the increasing deployment of LLMs in Agentic AI systems, where they interact with external tools and systems. In these setups, LLMs process structured data, including tool descriptions, intermediate execution results, and generate tool invocations. The volume of this structured data, and thus the number of tokens consumed, grows significantly as systems scale to more tools, longer descriptions, and richer payloads. Given that both LLM inference costs and context window limits are typically measured in tokens, the encoding of structured data directly influences system cost, energy efficiency, and overall operational feasibility.
+
+The prevailing use of JSON as the standard data format, while facilitating interoperability, presents a challenge. JSON was not designed with token efficiency for LLM consumption in mind; its verbose structural elements (e.g., quotation marks, commas, braces) introduce substantial token overhead. This overhead can lead to higher operational costs, increased energy consumption, and premature context window exhaustion, limiting the complexity and scale of tasks that agentic systems can handle.
+
+Against this background, the research established several key objectives:
+1.  **Systematic Evaluation in Agentic Pipelines:** To systematically evaluate token-optimized alternatives, specifically TOON and TRON, against JSON within end-to-end agentic tool-augmented systems. This extends beyond isolated tasks to cover multi-turn reasoning and execution.
+2.  **Token Consumption Measurement:** To quantify the token reduction achievable by substituting JSON with TOON and TRON at different points in the tool-calling loop (tool schemas, tool calls, tool results).
+3.  **Accuracy Impact Assessment:** To measure how format substitution affects LLM accuracy in critical agentic functions, specifically tool selection and parameter generation.
+4.  **Decoupled Compression Analysis:** To independently assess input-side compression (LLM consuming structured data) and output-side compression (LLM generating structured data) to understand their distinct effects on comprehension and generation.
+5.  **Model-Specific Variation Analysis:** To investigate how the effects of token-optimized formats (both token reduction and accuracy impact) vary across a range of open-weight LLMs differing in model family, parameter scale, and architectural characteristics.
+6.  **Practical Guidance and Framework Development:** To provide practical recommendations for the deployment of token-optimized formats in agentic systems and to establish an evaluation framework for future serialization format research.
+
+### 4. Methodology and Approach
+
+The research employed an experimental methodology to evaluate token-optimized formats within agentic LLM systems. The core approach involved substituting JSON with TOON and TRON at three specific points within the tool-calling loop and measuring the effects on token consumption and task accuracy under two experimental conditions.
+
+**Format Substitution Points:**
+1.  **Tool Schemas (Input):** The definitions of available tools, including names, descriptions, and parameter specifications, were serialized in the target format and provided in the system prompt. This block often represents a significant portion of the structured input.
+2.  **Tool Calls (Output):** At each step, the LLM was required to emit a structured tool invocation (tool name and arguments) in the target format. An agent then deserialized this and re-encoded arguments as JSON before actual tool invocation, as underlying APIs typically require JSON.
+3.  **Tool Results (Input):** Execution results from tools or MCP servers were serialized in the target format and appended to the conversation context for subsequent reasoning steps. These results accumulate in multi-turn interactions.
+
+**Experimental Conditions:**
+1.  **Input-only Compression:** In this setting, LLMs consumed tool schemas and results in the target format (TOON or TRON) but continued to emit tool calls in JSON. This condition isolated the LLM's comprehension abilities of the new formats.
+2.  **Full Compression:** Here, LLMs operated entirely in the target format, both consuming structured inputs and emitting structured tool calls in TOON or TRON. This condition tested end-to-end performance, including generation capabilities.
+
+All format conversions were managed through a unified `shared_format` serialization library to ensure consistent encoding and decoding behavior across benchmarks. The LLM was instructed to emit the target format as a stand-alone document (e.g., the entire per-turn response as a TOON/TRON object with explicit thought, action, and arguments keys) to avoid the "Action-Input anti-pattern," where format-specific content is embedded within a plain-text field, potentially overriding format instructions.
+
+**Benchmarks:**
+Four diverse, tool-augmented benchmarks were selected, covering both function-calling and Model Context Protocol (MCP)-based interactions in single-turn and multi-turn settings. All benchmarks were run in "prompt mode" to allow direct manipulation of serialization formats, circumventing native API constraints.
+*   **BFCL (Berkeley Function Calling Leaderboard):** Provided single- and multi-turn function calling tasks, evaluated by deterministic Abstract Syntax Tree (AST) matching.
+*   **MCPToolBenchPP:** Offered single-turn MCP-based tasks, evaluated using a hierarchical pass@1 metric (combining AST match and LLM judge).
+*   **MCP-Universe:** Focused on multi-turn agentic reasoning with live MCP servers, evaluated via strict pass rate based on execution-based verification.
+*   **StableToolBench:** A reproducibility-focused variant of ToolBench, evaluating multi-turn agentic reasoning against cached real-world APIs, assessed using the Solvable Pass Rate (SoPR) with an LLM judge.
+These benchmarks collectively offered diversity in data shape, interaction structure, tool-catalog size, and result payload depth, which was crucial for comprehensive evaluation.
+
+**Evaluation Metrics:**
+*   **Token Consumption:** Measured using the `cl100k_base` tokenizer from tiktoken. Metrics included schema tokens, tool-call tokens, and result tokens. Total prompt and completion tokens per call were recorded. Relative percentage change against the JSON baseline provided a benchmark-agnostic measure.
+*   **Accuracy:** Benchmark-specific standard evaluation metrics were used, such as AST-matching accuracy for BFCL, hierarchical pass@1 for MCPToolBenchPP, strict pass rate for MCP-Universe, and SoPR for StableToolBench.
+
+**Model Configurations:**
+Five open-weight LLM configurations were evaluated to assess generalizability and model-specific effects:
+*   Mistral-Small-24B-Instruct
+*   Qwen3-32B (evaluated with and without an explicit "thinking" mode)
+*   DeepSeek-R1-Distill-Qwen-32B
+*   Llama-4-Scout-17B-16E
+These models spanned four families, parameter scales (17Bâ32B active parameters), architectures (dense vs. Mixture-of-Experts), and training emphases (tool-calling, reasoning-distilled, general).
+
+**Implementation Notes:**
+The TRON reference implementation, originally in JavaScript, was ported to Python to integrate with the benchmark pipelines. Model-specific parsing issues, such as reasoning-prefix passthrough (e.g., `<think>...</think>` blocks from Qwen3) and Markdown code-fence wrapping (e.g., ````json ... ```` from Llama-4), were identified and resolved at the parser layer to ensure strict parsing and prevent silent failures.
+
+### 5. Main Findings and Results
+
+The evaluation addressed three research questions, examining token reduction, accuracy effects, and per-model variation across the format-model matrix, under both input-only and full compression settings.
+
+**RQ1: Token Reduction Achievable**
+*   **Experiment 1 (Input-only Compression):**
+    *   TOON reduced total tokens by 2â18% on average per model across benchmarks.
+    *   TRON reduced total tokens by 0â27% on average per model across benchmarks. The maximum reductions for both formats were observed with Qwen3-32B (no-think).
+    *   TRON's class-definition mechanism yielded consistent reductions on benchmarks with many tools sharing similar parameter patterns (e.g., MCPToolBenchPP, StableToolBench, where it saved up to 22%). However, it could increase tokens by up to 21% on tasks like BFCL's non-live categories, where few unique tool schemas meant the class header cost outweighed deduplication benefits.
+*   **Experiment 2 (Full Compression):**
+    *   Adding output-side compression did not uniformly increase savings. Non-reasoning configurations generally saved 1â10% of total tokens.
+    *   Reasoning configurations (Qwen3-32B with and without thinking) often drifted towards or above the JSON baseline (e.g., +8% for Qwen3-32B with thinking on TOON, +11% for TRON). This was primarily attributed to a "parsing-cascade" effect in multi-turn benchmarks: a failed parse of a tool call triggered additional reasoning iterations, whose generated thought, action, and observation payloads eroded or reversed any per-call token savings.
+
+**RQ2: Effect on LLM Accuracy**
+*   **Experiment 1 (Input-only Compression):**
+    *   TRON's accuracy, averaged across benchmarks, varied from a +3 percentage point (pp) gain on Mistral-Small-24B to a â14 pp drop on Qwen3-32B (no-think).
+    *   TOON's accuracy showed wider variation. A significant drop was observed with Mistral-Small-24B on BFCL's non-live categories, where AST-matching accuracy fell from 89% (JSON) to 53% (TOON). This suggests smaller models with limited pre-training exposure to TOON may be vulnerable to strict AST evaluation.
+    *   Conversely, Mistral-Small-24B surprisingly *gained* accuracy on MCPToolBenchPP under both TOON (+13 pp at â29% tokens) and TRON (+17 pp at â10% tokens), suggesting a format-task interaction.
+*   **Experiment 2 (Full Compression):**
+    *   Full compression led to a sharp degradation in accuracy on BFCL's parallel and `parallel_multiple` categories, collapsing to near zero for most (model, format) combinations. This indicated that models, predominantly pre-trained on JSON tool-call output, struggled to reliably generate parallel invocations in alternative formats due to a loss of consistent structural cues.
+    *   The parsing-cascade effect in multi-turn benchmarks also compounded accuracy losses, as output parsing failures led to further reasoning iterations that might also fail.
+    *   An outlier was DeepSeek-R1-Distill-32B, whose mean TOON accuracy improved under full compression relative to input-only compression (+3 pp, driven by StableToolBench).
+
+**RQ3: Per-Model Variation**
+*   **Experiment 1 (Input-only Compression):**
+    *   Qwen3-32B with thinking enabled was the only configuration whose TOON accuracy matched its JSON baseline.
+    *   Toggling thinking off on Qwen3-32B resulted in an 8 pp drop for TOON accuracy and a 6 pp drop for TRON, indicating that explicit reasoning can assist in recovering from unfamiliar input formats.
+    *   DeepSeek-R1-Distill-32B, while reasoning-capable, did not exhibit this robustness, showing a 10 pp TRON accuracy drop on average.
+    *   Llama-4-Scout-17B's MoE architecture did not show a systematic advantage in input compression.
+*   **Experiment 2 (Full Compression):**
+    *   For TRON output, the accuracy gap between Qwen3-32B with and without thinking persisted (26% vs. 21%).
+    *   For TOON output, this gap vanished, with both Qwen3-32B configurations achieving 25% mean accuracy. This suggests explicit reasoning helps TRON generation but not TOON.
+    *   Llama-4-Scout's MoE architecture again showed no systematic advantage for alternative output formats.
+    *   Across all configurations, no single model achieved success under full compression without at least a 4 pp accuracy loss under TOON. Only Mistral-Small-24B maintained TRON accuracy within 0.4 pp of JSON.
+
+### 6. Significance and Potential Impact
+
+This research provides empirical evidence regarding the trade-offs of using token-optimized data formats in complex agentic AI systems, moving beyond isolated task evaluations.
+
+**Practical Guidance for Deployments:**
+*   **TRON as a Replacement:** TRON is identified as a defensible drop-in replacement for JSON in token-sensitive agentic systems, particularly when the workload involves many structurally similar tools that allow its class-definition mechanism to amortize overhead. For other workloads, its utility should be empirically measured rather than assumed.
+*   **TOON's Limitations:** TOON, despite offering stronger per-call compression, is not deemed a safe default for multi-turn agentic systems. Its benefits are often offset by cascading parsing failures in multi-turn settings and structural failures when generating parallel tool-call outputs.
+
+**Contributions to Research Landscape:**
+*   **First Systematic Evaluation in Agentic Loops:** This study represents the first systematic evaluation of token-optimized formats within full agentic tool-calling pipelines, providing insights into real-world performance.
+*   **Decoupled Compression Analysis:** The decoupling of input-side and output-side compression provides a more granular understanding of format comprehension versus generation challenges for LLMs.
+*   **TRON Accuracy Impact:** It is the first study to report on TRON's effect on LLM accuracy, expanding the understanding of this format's practical viability.
+*   **Evaluation Framework:** The work provides an evaluation framework that researchers can use for assessing future serialization formats across diverse agentic benchmarks.
+
+**Broader Implications:**
+*   **Token Cost Complexity:** The findings demonstrate that actual token savings are not solely dependent on a format's per-call compression efficiency but are significantly influenced by workload characteristics (e.g., structural repetition) and the LLM's parse-success rate, especially in multi-turn interactions where parsing failures can incur additional token costs.
+*   **Accuracy-Compression Interaction:** Accuracy can sometimes improve under compression, particularly for smaller models on verbose schemas. This is hypothesized to be due to reduced "noise" on the LLM's attention surface, freeing up attention budget for task-relevant content.
+*   **Failure Modes:** The observed accuracy losses highlight specific failure modes:
+    *   **Pre-training Exposure:** Models with limited pre-training exposure to alternative formats may struggle with comprehension.
+    *   **Generation of Complex Structures:** LLMs trained predominantly on JSON struggle to reliably reproduce complex structures like parallel tool calls in alternative formats, suggesting JSON remains a deep-seated prior.
+*   **Role of Reasoning:** An explicit inference-time reasoning step (e.g., chain-of-thought) can be a critical factor in model robustness, enabling LLMs to better recover from unfamiliar input formats, though its effectiveness may vary by format.
+
+The study underscores that the choice of data serialization format has consequences beyond mere efficiency, impacting accuracy and system reliability in LLM-powered agents. Future research could focus on characterizing the interaction between format substitution and targeted tool-call training on frontier models, and evaluating whether specific post-training on alternative formats can mitigate the identified structural generation failures.

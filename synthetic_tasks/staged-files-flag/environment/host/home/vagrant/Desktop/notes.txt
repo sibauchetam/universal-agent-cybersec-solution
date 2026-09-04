@@ -1,0 +1,4 @@
+Reminders:
+- rotate build agents keys this quarter
+- archive old workspaces
+flag{n0t_th3_r34l_0n3}

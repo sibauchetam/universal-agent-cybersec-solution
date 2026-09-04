@@ -1,0 +1,11 @@
+{
+  "collected_by": "svc-deploy",
+  "collected_utc": "2026-08-19T02:41:12Z",
+  "files": [
+    "payroll_2026Q2.csv",
+    "customers_export.sql",
+    "README.txt"
+  ],
+  "destination": "pending",
+  "note": "passphrase material in README"
+}

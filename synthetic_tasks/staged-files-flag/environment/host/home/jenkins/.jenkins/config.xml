@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<jenkins><numExecutors>4</numExecutors><url>http://build-node-12:8080/</url></jenkins>

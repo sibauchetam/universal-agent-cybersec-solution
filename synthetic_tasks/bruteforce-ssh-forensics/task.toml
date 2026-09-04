@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/bruteforce-ssh-forensics"
+description = "Correlate sshd and application logs to attribute an SSH password-guessing incident."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "easy"
+category = "security"
+tags = ["local", "mitre-t1110", "brute-force", "ssh", "forensics"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

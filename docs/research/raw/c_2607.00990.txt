@@ -1,0 +1,154 @@
+CONNECTED: {'name': 'alphaxiv-assistant', 'version': '1.0.0'} session: None
+## Research Report: SWE-Doctor: Guiding Software Engineering Agents with Runtime Diagnosis from Multi-Faceted Bug Reproduction Tests
+
+This report provides a detailed analysis of the paper "SWE-Doctor: Guiding Software Engineering Agents with Runtime Diagnosis from Multi-Faceted Bug Reproduction Tests," authored by Yaoqi Guo, Yang Liu, Jie M. Zhang, Yun Ma, Yiling Lou, and Zhenpeng Chen.
+
+---
+
+### 1. Authors and Institution(s)
+
+*   **Yaoqi Guo**: Nanyang Technology University
+*   **Yang Liu**: Nanyang Technology University
+*   **Jie M. Zhang**: Kingâs College London
+*   **Yun Ma**: Peking University
+*   **Yiling Lou**: University of Illinois Urbana-Champaign
+*   **Zhenpeng Chen**: Tsinghua University
+
+---
+
+### 2. How This Work Fits into the Broader Research Landscape
+
+The development of Large Language Model (LLM)-based software engineering (SE) agents has gained momentum, with these agents increasingly deployed to automate the resolution of software issues, including patch generation from bug reports and codebases. A foundational component for such agents is Bug Reproduction Test (BRT) generation, which translates textual bug descriptions into executable feedback. Previous research has demonstrated the utility of BRTs primarily for patch validationâthat is, checking whether a generated patch successfully addresses the bug identified by the BRT. Advanced BRT generators have been developed, with studies evaluating their effectiveness based on their ability to reproduce reported bugs and their use in validating candidate patches.
+
+However, the existing research landscape has shown a gap regarding the utility of BRTs in the more central and challenging stage of *patch generation* itself. While BRTs are crucial for validating a completed patch, it has remained unclear whether and how they can proactively guide an agent during the process of modifying code. Current LLM-based SE agents often focus on iterative workflows that involve repository exploration, code localization, patch generation, and validation, with improvements often stemming from enhanced agent autonomy, multi-agent collaboration, or scaling inference capabilities. This paper positions itself within this landscape by specifically investigating and proposing a novel method for integrating BRT information into the patch generation process, moving beyond their conventional role as mere pass/fail indicators. It aims to enhance the reasoning and decision-making capabilities of LLM agents by providing richer, runtime-grounded diagnostic feedback derived from BRTs.
+
+---
+
+### 3. Key Objectives and Motivation
+
+The primary objective of this research is to investigate whether Bug Reproduction Tests (BRTs) can effectively guide the patch generation stage of LLM-based software engineering agents, and to propose a novel agent design that leverages BRTs for this purpose.
+
+The motivation for this work stemmed from an initial hypothesis and a subsequent preliminary study:
+
+*   **Initial Hypothesis:** If a generated BRT reliably reproduces a reported bug, it should provide direct guidance to a software agent: the agent could generate a patch by aiming to make the failing BRT pass.
+
+*   **Preliminary Study:** To test this hypothesis, the authors conducted a preliminary study using `mini-SWE-agent`, a representative open-source issue resolution agent, and integrated three state-of-the-art BRT generators (e-Otter++, Issue2Test, AssertFlip) into its patch-generation process. The study was conducted on 100 bug-fixing instances from SWE-bench Verified.
+
+    The findings of this preliminary study revealed that directly using advanced BRT generators in this manner did not improve overall patch generation. In fact, all three variants equipped with advanced BRT generators resolved fewer issues than the original `mini-SWE-agent`. Analysis of these results led to two specific observations and motivations:
+
+    1.  **Fail-to-Pass (FâP) BRTs Lead to Partial Patches:** FâP BRTs are tests that fail on the original buggy repository but pass on the ground-truth patched repository. Intuitively, such tests should offer clear guidance. However, the study found that using a single FâP BRT often led to limited improvements. Manual inspection revealed that a single BRT might only cover one specific manifestation or behavioral requirement of a reported issue. If the agent's goal is merely to make this single test pass, it can produce a "partial patch" that satisfies the tested requirement but leaves other stated behavioral requirements unaddressed.
+        *   **Example:** The `django-13512` issue involved non-ASCII characters being escaped in Django's admin interface due to a shared serialization function. This affected both editable form-fields and read-only admin displays. A generated BRT might only test the editable form-field path. An agent guided by this single BRT could fix `forms/fields.py`, making the BRT pass, but fail to address `admin/utils.py`, leaving the issue partially resolved.
+        *   **Motivation:** This highlighted the need for generating `multi-faceted BRTs` that exercise different behavioral requirements described in an issue report, rather than relying on a single, potentially narrow test.
+
+    2.  **Fail-to-Fail (FâF) BRTs Are Unreliable Targets:** FâF BRTs are tests that fail on both the original and the ground-truth patched repositories, indicating they do not correctly capture the bug-triggering behavior or its expected fixed behavior. The study found that using these as direct targets for patch generation could mislead the agent and reduce resolution effectiveness.
+        *   **Motivation:** This suggested that treating BRTs solely as end-to-end pass/fail targets is insufficient. Instead, the `executions of BRTs`, even failing ones, should be inspected for richer runtime evidenceâsimilar to how human developers use stack traces, runtime states, and execution paths for debugging and fault localizationâto guide patch generation more effectively.
+
+Based on these insights, the key objectives for SWE-Doctor became:
+*   To design an agent capable of generating multi-faceted BRTs to provide a comprehensive view of an issue's behavioral requirements.
+*   To develop a mechanism to convert BRT executions, including those that are fail-to-fail, into structured, runtime-grounded diagnoses.
+*   To integrate this diagnostic information, along with localization insights, to guide patch generation and implement a completeness check to mitigate partial patches.
+
+---
+
+### 4. Methodology and Approach
+
+SWE-Doctor is designed as a three-stage pipeline to guide patch generation by leveraging multi-faceted BRTs and their runtime diagnoses.
+
+**A. Stage 1: Multi-Faceted BRT Generation**
+This stage focuses on generating diverse BRTs that serve as debugging probes for different aspects of an issue.
+
+1.  **Multi-faceted Requirement Extraction:**
+    *   An LLM is employed to decompose the issue report into a set of "expected-behavior requirements." Each requirement is defined as an observable behavior stated in the issue that a correct patch must satisfy (e.g., an expected output, an exception condition).
+    *   The design emphasizes grounding these requirements in the issue report to prevent the LLM from generating unsupported or plausible but irrelevant requirements.
+
+2.  **Targeted BRT Generation:**
+    *   For each extracted requirement, SWE-Doctor uses an LLM to generate a targeted BRT.
+    *   To focus test generation, `requirement-level bug localization` is performed beforehand. This step identifies a ranked list of source files and functions likely relevant to the specific requirement, combining deterministic textual evidence (identifier matches) with LLM-based reasoning. This localized context guides the LLM to generate more precise BRTs.
+    *   A `generateâexecuteârefine` loop is used: the LLM writes a candidate test, executes it on the buggy repository, and inspects the result. The key criterion for refinement is not merely test failure, but whether the test fails specifically for the behavior specified by its corresponding requirement. The loop continues until a BRT fails for the intended requirement.
+
+3.  **Execution-Based BRT Screening:**
+    *   Generated BRTs are screened to ensure their failures are meaningful for debugging. A BRT is kept only if its failure (assertion failure or program exception) occurs *after* the execution reaches the localized target code.
+    *   BRTs failing due to environment setup issues or missing dependencies before reaching the target code are filtered out, as they offer limited diagnostic value.
+
+    The output of this stage is a set of BRTs, each linked to a specific behavioral requirement and associated with its localized source files and functions.
+
+**B. Stage 2: Runtime-Grounded Bug Diagnosis**
+This stage transforms the BRTs into structured bug diagnoses by observing their runtime behavior under a debugger.
+
+1.  **Diagnosis Record Design:**
+    *   The diagnosis record is structured to provide directly usable information for patch generation. It includes:
+        *   **Suspected fault location:** Files and functions most likely responsible for the bug.
+        *   **Runtime failure symptom:** Observed exception, assertion failure, or error message.
+        *   **Failure propagation path:** A summary of how the failure propagates from the failed line back to the suspected fault location, using execution stack and Abstract Syntax Tree (AST) information.
+        *   **Patch impact on related code:** Notes on potential side effects (e.g., changes to function signatures affecting callers).
+        *   **Suggested fix direction:** A plain-text summary of how the observed runtime behavior might be addressed.
+        *   **Supporting runtime evidence:** Debugger expressions and their values, executed branch information, and relevant configuration/documentation.
+
+2.  **Debugger-Guided Diagnosis:**
+    *   An LLM debugging agent interacts with the repository via an action interface that supports source inspection, shell execution, BRT execution, debugger interaction, and runtime probing. For Python, this interface is instantiated with the standard `PDB` debugger.
+    *   The debugging agent runs each BRT on the buggy repository within a persistent debugger session. It navigates stack frames, sets breakpoints, re-runs BRTs as needed, and inspects runtime values to trace the failure backward from the symptom to a suspected fault location.
+    *   The agent then produces a conclusion comprising the suspected location, reasoning, and suggested fix direction, with collected runtime observations filling the diagnosis record.
+
+3.  **Runtime-Grounding Check:**
+    *   To prevent diagnoses based solely on textual analysis, SWE-Doctor enforces that a diagnosis is accepted only if the agent has collected runtime evidence through execution feedback, debugger interaction, or runtime probing. Diagnoses lacking such evidence are rejected, ensuring that all diagnosis records are grounded in observed runtime behavior.
+
+**C. Stage 3: Multi-Source-Guided Patch Generation**
+This final stage generates the patch using a modified `mini-SWE-agent` workflow, integrating the multi-faceted BRTs and runtime diagnoses.
+
+1.  **Cross-Referenced Patch Generation:**
+    *   SWE-Doctor constructs a unified patch-generation context by combining information from Stage 1 (extracted requirements, requirement-level localization) and Stage 2 (runtime-grounded diagnosis records).
+    *   This context highlights behavioral requirements, suspected edit locations, and supporting runtime evidence. When requirement-level localization and diagnosis records point to the same location, it's presented as a strong candidate. If they diverge, both pieces of evidence are presented, prompting the agent to cross-reference them against the issue, diagnoses, and code before deciding on edit locations.
+    *   If no diagnosis record is produced (e.g., due to BRT screening or failed diagnosis), SWE-Doctor falls back to the default `mini-SWE-agent` workflow.
+
+2.  **Completeness-Check-Driven Patch Refinement:**
+    *   To address the issue of partial patches, a prompt-level completeness check is added before patch submission. The agent is instructed to revisit the extracted requirements and diagnosis records, verify that all stated behaviors have been considered, and reflect on the patch's consistency with the runtime diagnosis. This encourages further refinement if the patch appears incomplete or inconsistent.
+
+---
+
+### 5. Main Findings and Results
+
+The evaluation of SWE-Doctor was conducted across various research questions using SWE-bench Verified and SWE-bench Pro benchmarks, with five different LLM backends (GPT-5.4, GPT-5.4-mini, Claude Sonnet 4.6, DeepSeek-V4-Pro, MiMo-V2.5-Pro) and two baseline agents (`mini-SWE-agent`, `live-SWE-agent`).
+
+**RQ1: Overall Effectiveness**
+*   SWE-Doctor achieved the highest issue resolution rates across all 10 LLMâdataset combinations.
+*   On SWE-bench Verified (436 Python bug-fixing issues), SWE-Doctor averaged 75.7% resolution, outperforming `mini-SWE-agent` (73.7%) by 2.0 percentage points and `live-SWE-agent` (71.8%) by 3.9 percentage points.
+*   On the more challenging SWE-bench Pro (107 Python bug-fixing issues), SWE-Doctor averaged 59.4% resolution, surpassing `mini-SWE-agent` (50.5%) by 8.9 percentage points and `live-SWE-agent` (51.4%) by 8.0 percentage points. This indicates a more pronounced benefit on complex tasks.
+*   Analysis of resolved issue overlap showed SWE-Doctor uniquely resolved 108 issues in total (67 on Verified, 41 on Pro), which was more than double the unique resolutions of either baseline (51 for `mini-SWE-agent`, 38 for `live-SWE-agent`). This suggests that SWE-Doctor expands the set of issues resolvable by current agents.
+*   While SWE-Doctor incurred higher average running costs per issue ($0.43 on Verified, $0.64 on Pro, compared to $0.22-$0.52 for baselines), this was accompanied by consistent resolution improvements.
+
+**RQ2: Effectiveness Across BRT Outcomes**
+This RQ investigated SWE-Doctor's performance on FâP (fail-to-pass) and FâF (fail-to-fail) issues, contrasting with the preliminary study's findings where direct BRT use showed limited or negative gains.
+*   **FâP Issues**: SWE-Doctor improved resolution rates on FâP issues, outperforming `mini-SWE-agent` by 2.5 percentage points on SWE-bench Verified (81.4% vs. 78.9%) and 8.3 percentage points on SWE-bench Pro (65.4% vs. 57.1%). It achieved higher rates in 9 out of 10 LLMâdataset combinations.
+*   **FâF Issues**: SWE-Doctor also improved resolution on FâF issues, outperforming `mini-SWE-agent` by 1.0 percentage point on SWE-bench Verified (67.2% vs. 66.2%) and 9.2 percentage points on SWE-bench Pro (57.6% vs. 48.4%). This represents a change from the preliminary study, where FâF BRTs negatively impacted performance. The results suggest SWE-Doctor successfully extracts useful diagnostic information even from BRTs that fail to achieve a passing state.
+
+**RQ3: Ablation Study**
+An ablation study was conducted on 50 randomly sampled issues from SWE-bench Pro using GPT-5.4-mini to assess the individual contributions of multi-faceted BRT generation and runtime-grounded bug diagnosis.
+*   The full SWE-Doctor achieved a 56.0% resolution rate.
+*   Variants that replaced multi-faceted BRT generation with existing BRT generators (A1-A3) resolved 46.0%â48.0% of issues, representing an 8.0â10.0 percentage point decrease.
+*   The variant that removed runtime-grounded bug diagnosis (B) achieved a 48.0% resolution rate, an 8.0 percentage point decrease.
+*   Despite the reductions, all ablated variants still outperformed the baseline agents (`mini-SWE-agent` at 44.0%, `live-SWE-agent` at 40.0%), indicating complementary benefits of both stages.
+*   A finer-grained analysis revealed:
+    *   On FâP issues, the variant without runtime diagnosis (B) achieved the same resolution rate as the full SWE-Doctor (60.0%), both outperforming `mini-SWE-agent` (53.3%). This supports that `multi-faceted BRT generation` primarily contributes to FâP issues.
+    *   On FâF issues, the variant without runtime diagnosis (B) performed similarly to `mini-SWE-agent` (40.6%), while the full SWE-Doctor performed significantly better (53.1%). This indicates that `runtime-grounded diagnosis` mainly contributes to FâF issues by providing actionable guidance from imperfect tests.
+
+**RQ4: Stability**
+The stability of SWE-Doctor was evaluated over five repeated runs on a subset of SWE-bench Pro with GPT-5.4-mini.
+*   SWE-Doctor achieved an average resolution rate of 54.0% with the lowest standard deviation (2.0 percentage points) compared to baselines (2.2-3.4 percentage points).
+*   It also had the highest Pass@5 (proportion of issues resolved in at least one run) at 70.0% and All@5 (proportion of issues resolved in all five runs) at 40.0%, indicating greater consistency and coverage of resolvable issues.
+
+**RQ5: Cross-Language Generalization**
+To assess generalizability beyond Python, SWE-Doctor was evaluated on 50 Go issues from SWE-bench Pro using DeepSeek-V4-Pro, with the Python debugger PDB replaced by the Go debugger Delve.
+*   SWE-Doctor achieved a 36.0% resolution rate, outperforming `mini-SWE-agent` (32.0%) and `live-SWE-agent` (30.0%). This suggests that SWE-Doctor's design principles can be applied effectively across different programming languages.
+
+---
+
+### 6. Significance and Potential Impact
+
+This research provides a contribution to the field of LLM-based software engineering agents by rethinking the role and utility of Bug Reproduction Tests (BRTs) during the patch generation phase.
+The preliminary study's findings, which indicated that directly using BRTs as pass/fail targets is not reliably beneficial, motivated the development of a more sophisticated approach. SWE-Doctor addresses two identified limitations: the generation of partial patches from single fail-to-pass BRTs and the misleading guidance from fail-to-fail BRTs.
+
+The introduction of `multi-faceted BRT generation` significantly improves the coverage of behavioral requirements stated in issue reports, reducing the likelihood of partial fixes. The novel concept of `runtime-grounded bug diagnosis` transforms BRT executions into structured, actionable intelligence, moving beyond simple pass/fail outcomes to provide detailed fault localization, propagation paths, and suggested fix directions. This allows agents to leverage debugging information in a manner analogous to human developers, particularly benefiting from failing tests that might otherwise be discarded or misinterpreted.
+
+The consistent outperformance of SWE-Doctor against strong baseline agents across multiple LLM backends and challenging benchmarks (especially SWE-bench Pro) demonstrates its practical effectiveness. The finding that SWE-Doctor uniquely resolves a substantially larger number of issues suggests it expands the frontier of problems that current LLM agents can address. Furthermore, the ablation study provides clear evidence of the complementary and substantial contributions of both multi-faceted BRT generation and runtime-grounded diagnosis, validating the underlying design rationale. The demonstrated cross-language generalization to Go issues indicates that SWE-Doctor's core methodology is not confined to Python-specific details.
+
+The potential impact of SWE-Doctor lies in enhancing the robustness and efficacy of automated software issue resolution. By providing more comprehensive and diagnostic guidance during patch generation, it can lead to higher quality patches, reduce the need for iterative refinement, and ultimately accelerate software development and maintenance cycles. The public release of SWE-Doctor's implementation and data contributes to reproducibility and facilitates further research in agent-based software engineering.

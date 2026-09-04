@@ -1,0 +1,113 @@
+CONNECTED: {'name': 'alphaxiv-assistant', 'version': '1.0.0'} session: None
+This report provides a detailed analysis of the research paper "Retrieval-Augmented LLMs for Security Incident Analysis," authored by Xavier Cadet et al.
+
+---
+
+### 1. Authors and Institution(s)
+
+The research was conducted by a collaborative team from academic institutions and an industry partner:
+*   **Xavier Cadet, Edward Koh, Peter Chin**: Dartmouth College, Hanover, NH, USA
+*   **Aditya Vikram Singh, Harsh Vijay Mamania, Simona Boboila, Alina Oprea**: Northeastern University, Boston, MA, USA
+*   **Alex Fitts, Dirk Van Bruggen**: PUNCH Cyber Analytics, Reston, VA, USA
+
+### 2. How This Work Fits into the Broader Research Landscape
+
+The field of cybersecurity faces increasing pressure from growing volumes and complexities of cyber threats, often outpacing the capacity of human security analysts. Traditional security detection mechanisms primarily rely on signatures and static rules, which exhibit limitations in detecting novel or sophisticated attack patterns that spread across disparate log sources over time. Existing Security Information and Event Management (SIEM) systems generate thousands of alerts daily, yet analysts can only investigate a fraction, leading to fatigue and missed incidents.
+
+Prior research has explored various machine learning (ML) and Large Language Model (LLM) approaches to address these challenges. Early efforts focused on alert triage and anomaly scoring, yielding classifications or rankings rather than the detailed narrative reconstructions required for incident response. Examples include LogLLM for log-based anomaly detection and prompt engineering for zero-shot anomaly detection with LogPrompt. Other work has utilized domain-specific language models like SecureBERT and CySecBERT for cybersecurity Natural Language Processing (NLP) tasks and threat taxonomy mapping (TRAM) to MITRE ATT&CK. More recent advancements involve multi-agent LLM systems for insider threat detection (Audit-LLM) and SOC-specific alert triage (CORTEX), as well as threat intelligence automation for Indicator of Compromise (IOC) extraction. While these systems enhance alert-level processing and summarization, they generally do not address end-to-end incident analysis involving structured question-answering over heterogeneous security logs.
+
+Large Language Models are recognized for their potential to interpret unstructured text, integrate disparate facts, and generate coherent narratives. However, direct feeding of raw security logs into LLMs is impractical due to context window limitations, the overwhelming volume of data, high noise-to-signal ratio, and inference latency. This necessitates intelligent systems that can extract relevant events and present them in a concise format.
+
+Retrieval-Augmented Generation (RAG) has emerged as a paradigm to mitigate LLM limitations such as hallucination, outdated knowledge, and opacity by providing external, retrieved evidence at inference time. RAG has been applied to security tasks, including cyber attack classification (CyberRAG), security log analysis combining knowledge graphs and vector search (AgCyRAG), and CTI automation (GraphRAG-based approaches). These applications primarily focus on classification, threat intelligence extraction, or specialized agent orchestration.
+
+This work contributes to the landscape by specifically addressing end-to-end security incident analysis formulated as question-answering over diverse security logsâincluding intrusion detection system (IDS) alerts, network telemetry, and authentication events. It proposes a novel RAG architecture tailored to the characteristics of security data, emphasizing targeted query-based filtering and cross-event semantic reasoning to reconstruct attack sequences and answer forensic questions, distinguishing it from prior work that largely focuses on alert triage or classification.
+
+### 3. Key Objectives and Motivation
+
+The primary motivation for this research stems from critical challenges observed in Security Operations Centers (SOCs). Cybersecurity threats are increasing in both volume and sophistication, leading to significant pressure on the limited analyst workforce. Modern SIEM systems generate thousands of alerts daily, many of which are benign or low-priority, contributing to analyst fatigue and the potential for genuine incidents to be overlooked. Investigating a security incident is a labor-intensive process that requires collecting and synthesizing evidence from multiple, disparate log sourcesâsuch as intrusion detection alerts, network traffic records, and authentication eventsâto identify compromised assets, trace attacker actions, and understand intrusion mechanisms. Current rule-based and signature-based detection methods struggle to identify novel or stealthy attack patterns that unfold over hours or days across heterogeneous log data, where no single log entry provides a complete picture.
+
+Large Language Models possess capabilities to interpret natural language, synthesize information, and generate coherent narratives, positioning them as potential tools for automating aspects of incident analysis. However, directly feeding raw security logs into LLMs is problematic due to the massive volume of data (often exceeding context window limits), the high proportion of irrelevant "noise" data, and the computational cost and latency of LLM inference. These practical constraints hinder the direct application of LLMs to real-time incident response.
+
+In response to these motivations, the key objectives of this work are articulated through the following contributions:
+
+*   **Problem Formulation for LLM-based Incident Analysis**: The research formalizes security incident analysis into two complementary tasks:
+    *   **Structured Question-Answering**: The system answers forensic questions about indicators, compromised hosts, and attacker actions by leveraging retrieval-augmented context.
+    *   **Attack Sequence Reconstruction**: The system correlates discrete forensic events into causal narratives of attack progression over time, evaluated against reference timelines.
+*   **Security-Aware RAG Architecture with Cross-Event Semantic Reasoning**: A retrieval pipeline is designed specifically for security data. This pipeline uses targeted queries to extract Indicators of Compromise (IOCs), employs aggregators to compress large volumes of events into patterns, and utilizes semantic chunking to preserve crucial cross-event relationships. This architecture enables LLMs to identify complex attacks requiring correlation across multiple discrete events, such as Active Directory certificate abuse, by interpreting contextual cues like Subject/SAN mismatches.
+*   **LLM Model Evaluation with Cost-Effectiveness Analysis**: The study evaluates eight LLM configurations, encompassing both cloud APIs (Claude Sonnet 4, DeepSeek V3, GPT-4, GPT-4o, GPT-5-mini, GPT-5.2) and locally deployed models (Llama 3.1:70b, Cisco Foundation-Sec-8B). This evaluation focuses on performance, latency, and cost-effectiveness across malware traffic and Active Directory attack scenarios, aiming to identify optimal trade-offs for operational deployment.
+*   **Baseline Comparisons and Failure Mode Analysis**: The RAG system's performance is compared against non-RAG and single-source (Suricata-only) baselines to demonstrate the necessity of preprocessing and multi-source data. Furthermore, common failure modes are characterized into distinct categories (query coverage, retrieval/size limits, LLM reasoning errors) with proposed remediation strategies, providing practical guidance.
+*   **Reproducibility**: The implementation, including the query library, RAG pipeline, evaluation scripts, and pre-computed LLM reports, is released to support reproducibility.
+
+### 4. Methodology and Approach
+
+The system architecture is bifurcated into two modular components: Security Context Extraction and RAG-LLM Analysis. This modularity allows for independent tuning and improvement of each component.
+
+**4.1 Design Principles**
+The system's design is guided by five principles:
+1.  **Filter before analysis**: To address LLM slowness and performance degradation on noisy data, security-relevant information is extracted via targeted IOC queries before LLM processing.
+2.  **Embed once, query many times**: Extracted data is embedded into a vector database once per dataset and cached, enabling repeated querying.
+3.  **Periodic analysis**: Analysis is performed at defined intervals, batching related activities into coherent time windows, rather than on every event.
+4.  **Provider-agnostic design**: LLM interactions are abstracted, facilitating interchangeability of providers to balance cost, latency, and privacy.
+5.  **Extensible IOC query library**: Detection queries are maintained in a separate library with MITRE ATT&CK mappings, allowing for easy extension.
+
+**4.2 Security Context Extraction**
+This component integrates with existing network monitoring infrastructure, exemplified by Security Onion, which aggregates network traffic using Suricata and Zeek. Communication occurs via ElasticSearch REST API calls, ensuring generalization to any SIEM with a query API.
+The core of this component is a library of IOC extraction queries. For Active Directory (AD) attacks, this library covers nine query types mapped to MITRE ATT&CK techniques (e.g., certificate abuse, Kerberos ticket forgery). Malware traffic scenarios use a separate set targeting network-level IOCs. These queries combine base filters with aggregators to compress thousands of events into compact, semantically rich summaries. This aggregation step is critical for exposing behavioral signals that individual log entries would not reveal, preserving cross-event patterns necessary for attack identification. The resulting aggregated data is then prepared for embedding and indexing.
+
+**4.3 RAG-LLM Analysis**
+This component transforms the extracted security information into actionable incident reports.
+*   **Data Processing and Embedding**: The structured output from Security Context Extraction, comprising aggregations and log entries, is split into semantically meaningful chunks. These chunks are then embedded using `all-mpnet-base-v2`, a pre-trained sentence embedding model, and indexed in a FAISS vector store for efficient similarity search. The complete index is serialized to disk for reusability.
+*   **Retrieval and Prompt Construction**: For each security question, the system retrieves the top-k most relevant chunks from the embedding index using semantic similarity. The question itself is embedded using the same model. The prompt sent to the LLM establishes its role as a cybersecurity analyst, presents the question, and provides brief network context (e.g., address ranges, domain name). The retrieved chunks are included, each tagged with its source filename for attribution. The prompt concludes with instructions to answer based on provided evidence or indicate insufficiency.
+*   **Security Questions**: The system supports various question categories:
+    *   **Identification questions**: Focus on IOCs (e.g., infected hosts, C2 servers).
+    *   **Timeline questions**: Focus on attack progression (e.g., attacker steps, order, timing).
+    *   **Remediation questions**: Focus on defensive actions (e.g., containment, prevention).
+    All question types utilize the same retrieval and prompting pipeline, with the LLM adapting its response format.
+*   **Multi-LLM Support**: The system's provider-agnostic interface allows for the interchangeability of LLM providers. Evaluated providers include Anthropic (Claude Sonnet 4), OpenAI (GPT-4, GPT-4o, GPT-5-mini, GPT-5.2), DeepSeek (DeepSeek V3), and local deployments via Ollama (Llama 3.1:70b) and Cisco (Cisco Foundation-Sec-8B).
+*   **Output Generation**: The system generates a structured incident report. This report includes findings for each security question, detailing specific evidence (IPs, hostnames, timestamps) and attributing findings to source files. A summary section provides a brief overview (attack type, key indicators, recommended actions). Metadata for reproducibility (LLM provider, chunks analyzed, retrieval settings, timing) is also included.
+
+**4.4 Experimental Overview**
+The system was evaluated in two settings:
+1.  **Malware Traffic Analysis**: 17 scenarios from publicly available sources (Malware-Traffic-Analysis.net, Unit 42 Wireshark Quizzes, SANS ISC contests) were used for forensic question-answering. This involved 321 MB of PCAPs, 94,948 Security Onion log events, 129 forensic questions, and 218 reference indicators.
+2.  **Active Directory Attack Reconstruction**: A multi-stage AD attack from a controlled red team exercise was used for attack step detection and defense recommendation.
+**LLM Configurations**: Eight LLM configurations were tested.
+**RAG Configuration**: `all-mpnet-base-v2` for embeddings, FAISS for vector store, `k=7` retrieved chunks (default), `temperature=0.1`, `max_output_tokens=4000`.
+**Evaluation Metrics**: Precision (`|A â© R| / |A|`) and Recall (`|A â© R| / |R|`) were used, with partial credit for set-valued questions. Recall was primarily reported for malware analysis, while both precision and recall were used for AD analysis.
+
+### 5. Main Findings and Results
+
+The evaluation of the RAG-based LLM system yielded several findings across malware traffic analysis and Active Directory attack scenarios.
+
+**5.1 Malware Traffic Analysis**
+*   **Feasibility and Performance (RQ1)**: The system demonstrated acceptable performance. Claude Sonnet 4 achieved the highest average recall at 94%, followed by DeepSeek V3 at 89%, and Llama 3.1:70b at 81%. Notably, locally deployed models like Llama (81%) and Cisco Foundation-Sec-8B (71%) performed comparably to or exceeded some cloud-based GPT variants (64â69%), indicating that data sensitivity requirements may not necessitate a significant accuracy trade-off. Complex multi-stage infections (e.g., IcedID) and multi-host scenarios were the most challenging, requiring robust cross-source correlation.
+*   **Reasoning and Cross-Source Integration (RQ2)**: Models exhibited qualitative differences in reasoning, particularly for questions requiring synthesis across multiple data sources. Claude achieved 89% recall on multi-chunk questions and cited two or more chunks for 95% of its answers. DeepSeek achieved 78% recall with 88% multi-chunk citation. In contrast, GPT-family models showed lower recall (47â53%) and multi-chunk citation rates (31â38%). DeepSeek's approach minimized false positives through evidence-weighted reasoning, while GPT models tended towards undifferentiated enumeration, increasing analyst burden.
+*   **Impact of Context Size (RQ3)**: Varying the number of retrieved chunks (k) demonstrated that `k=7` was a sweet spot. Claude and DeepSeek showed substantial performance gains (33â36 percentage points) when increasing `k` from 1 to 3, outperforming GPTs (13â18 points), suggesting stronger cross-chunk integration abilities. Performance generally plateaued or slightly declined at `k=14`.
+*   **Baseline Comparisons (RQ4)**:
+    *   **No-RAG Baseline**: Directly feeding raw logs without RAG preprocessing resulted in significantly lower recall. Due to context window limitations, only 0.6â4.3% of logs were processed, leading to missed attack infrastructure.
+    *   **Suricata-Only Baseline**: Using only IDS alerts yielded 40% recall, failing to provide crucial identity attribution (e.g., hostname, user account) that requires correlation with other log sources like Kerberos authentication and HTTP records.
+    These comparisons established that both targeted preprocessing and access to multiple heterogeneous log sources are essential for effective security incident analysis.
+*   **Cost Analysis**: DeepSeek V3 emerged as the most cost-effective cloud model, achieving 89% recall at $0.008 per analysis, which is 15 times cheaper than Claude Sonnet 4 ($0.12) for comparable accuracy. Locally deployed models, while incurring zero per-query cost, presented higher latency.
+
+**5.2 Active Directory Attack Analysis**
+*   **Attack Step Detection (RQ1)**: On a multi-stage Active Directory attack scenario, Claude Sonnet 4 and DeepSeek V3 achieved 96% recall and 100% precision in identifying attack steps within 5-minute sliding windows. The performance ranking of LLMs mirrored that of the malware analysis, indicating consistency across task types. The system accurately identified initial access, credential theft chains, and lateral movement.
+*   **Multi-Step Attack Reconstruction**: The system demonstrated the ability to reconstruct complex attack chains, such as an ESC1 certificate template abuse. By correlating five discrete events across different log sources, the LLM identified a Subject/SAN mismatch in certificate issuance as the privilege escalation vector, linking it to subsequent Kerberos events. This highlighted its capability for contextual interpretation beyond mere pattern matching.
+*   **Defense Recommendation Quality (RQ5)**: Claude Sonnet 4 generated defense recommendations with an average recall of 89% and precision of 76%, aligning well with expert-defined defensive actions. Recommendations were contextually grounded, such as certificate revocation after fraudulent issuance.
+*   **Operational Feasibility**: The sub-minute analysis latency per 5-minute window with cloud models, and under 2 minutes for the slowest local model, demonstrated the system's real-time feasibility for incident response, where analysis time becomes a small fraction of the overall response process.
+
+**5.3 Failure Modes**
+Analysis of recall misses identified three disjoint categories:
+1.  **Query Coverage**: Reference indicators were not extracted due to limitations in the feature query library. Remediation involves refining query filters or increasing aggregation depth.
+2.  **Retrieval and Size Limits**: Relevant chunks failed to reach the LLM prompt or responses were truncated. Remediation involves adjusting the retrieval window (`k`), prompt character limits, or output token budgets.
+3.  **LLM Reasoning Errors**: Models misinterpreted chunks, failed to integrate information across chunks, or formatted output incorrectly despite receiving relevant context. Remediation involves prompt engineering (question rewording, specific instructions) and model selection. These errors were identified as the primary driver for performance differences across LLM families.
+
+### 6. Significance and Potential Impact
+
+This research presents a significant advancement in automating security incident analysis, addressing critical gaps in current Security Operations Center (SOC) capabilities. Its significance and potential impact can be summarized as follows:
+
+*   **Enhanced Incident Analysis Capabilities**: The system demonstrates the feasibility and effectiveness of Retrieval-Augmented Generation (RAG) coupled with large language models for complex security incident analysis, moving beyond basic alert triage or classification. It provides detailed, evidence-backed narrative reconstructions of attacks and answers to forensic questions, which is crucial for incident responders.
+*   **Improved Efficiency and Reduced Analyst Fatigue**: By automating the labor-intensive process of sifting through vast volumes of heterogeneous logs, the system can significantly accelerate incident investigation. This has the potential to reduce analyst fatigue, allowing human experts to focus on strategic decision-making and more complex threat hunting, rather than tedious data correlation.
+*   **Detection of Sophisticated Attacks**: The security-aware RAG architecture, particularly its cross-event semantic reasoning, enables the system to identify sophisticated, multi-stage attacks (e.g., Active Directory certificate abuse) that require correlating individually legitimate operations across disparate log sources. This capability surpasses the limitations of traditional signature-based methods.
+*   **Cost-Effectiveness and Deployment Flexibility**: The comprehensive evaluation of various LLMs, including a cost-effectiveness analysis, provides valuable guidance for organizations. The finding that models like DeepSeek V3 offer near-equivalent accuracy to top-tier models at a significantly lower cost, combined with the viability of locally deployed models for data privacy, offers practical deployment options for diverse operational environments.
+*   **Insights into LLM Capabilities in Cybersecurity**: The research reveals that general-purpose LLMs with strong reasoning capabilities can outperform domain-specific models when properly augmented with relevant context. This suggests that foundational reasoning ability, rather than niche pretraining, is a primary driver for complex forensic tasks, informing future LLM development and selection strategies for cybersecurity.
+*   **Actionable Guidance and Reproducibility**: The detailed analysis of failure modes, accompanied by concrete remediation strategies, provides actionable insights for practitioners implementing similar systems. The release of the implementation code and datasets promotes reproducibility and further research in this domain.
+*   **Foundation for Future Automation**: By addressing the core challenge of context limitation and noise in security logs, this work lays a foundation for more advanced automation in incident response, threat intelligence, and proactive defense strategies, ultimately contributing to a more resilient cybersecurity posture.

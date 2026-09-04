@@ -1,0 +1,4 @@
+attacker_ip=198.51.100.77
+compromised_user=svc-backup
+failed_attempts=87
+first_success_utc=2026-06-14T03:18:37.000Z

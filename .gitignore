@@ -1,0 +1,10 @@
+# Секреты и локальные артефакты — НЕ коммитить
+.env
+*.env
+!*.example
+results/
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+nohup.out

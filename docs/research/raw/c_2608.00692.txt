@@ -1,0 +1,124 @@
+CONNECTED: {'name': 'alphaxiv-assistant', 'version': '1.0.0'} session: None
+## Research Report: Vul4Py: Benchmarking Automated Vulnerability Repair in Python with Paired Exploit and Functional Oracles
+
+### 1. Authors and Institution(s)
+
+The research paper "Vul4Py: Benchmarking Automated Vulnerability Repair in Python with Paired Exploit and Functional Oracles" was authored by:
+
+*   **Tan Bui, Ferdian Thung, Xin Zhou, and David Lo** from Singapore Management University.
+*   **Ting Zhang** (corresponding author) **and Yunpeng Xiong** from Monash University.
+*   **Penghao Jiang** from the University of New South Wales.
+
+### 2. How this work fits into the broader research landscape
+
+Automated Vulnerability Repair (AVR) is a field focused on automatically generating patches to fix security flaws in software. This area has seen significant advancements through program analysis, machine learning techniques, and more recently, Large Language Models (LLMs) and LLM-powered agents. The broader research landscape for AVR includes:
+
+*   **Vulnerability Detection:** A substantial body of work exists for automatically identifying vulnerabilities, but this primarily localizes the problem, not resolves it.
+*   **Patch Generation:** Much of the prior AVR research has concentrated on developing methods to propose fixed versions of vulnerable programs, treating it as a sequence-to-sequence task. These methods broadly fall into categories such as search-based and template-based approaches (e.g., applying predefined fix templates or searching within candidate patch spaces), semantics-based methods (e.g., using program analysis like concolic execution to pinpoint root causes and guide modifications), and learning-based methods (e.g., fine-tuning transformer models on vulnerability fix pairs).
+*   **Patch Validation:** This phase, crucial for verifying that a proposed patch genuinely repairs the vulnerability without introducing new issues, has received less attention. Effective validation is essential for trustworthy benchmarks.
+*   **Rise of LLMs and Agents:** LLMs have demonstrated capabilities in various software engineering tasks, including code completion, summarization, and program repair. For AVR, LLMs can leverage learned code semantics and vulnerability patterns to suggest fixes, often without explicit test cases or formal specifications. More recent advancements involve software engineering agents that can iteratively execute projects, observe test failures, and revise their edits, offering a more dynamic approach than single-shot patch generation.
+
+Despite these advancements, the paper identifies a gap in the landscape, specifically concerning Python. Python is a widely used language foundational to web, data, and machine learning infrastructure, yet robust tooling and benchmarks for evaluating automated repair of Python vulnerabilities remain limited. Existing Python AVR benchmarks often rely solely on proof-of-concept exploits for validation or only apply functional tests conditionally. This practice overlooks "functional regressions," where a patch successfully neutralizes an exploit but inadvertently breaks unrelated program functionality, leading to an inaccurate assessment of repair success. Previous surveys on AVR have also not comprehensively addressed LLM-based approaches for Python or their end-to-end workflow validation.
+
+### 3. Key objectives and motivation
+
+The primary objective of this research is to address the absence of a verifiable and comprehensive benchmark for Automated Vulnerability Repair (AVR) specifically designed for Python. This benchmark is intended to enable head-to-head comparisons of various AVR approaches, particularly those leveraging Large Language Models (LLMs) and LLM agents.
+
+The motivation for this work stems from several critical observations:
+
+1.  **Dominance of Python:** Python is a widely adopted programming language, underpinning critical web applications, data science infrastructure, and machine learning systems. Vulnerabilities in widely depended-on Python packages can have broad, downstream impacts. However, its vulnerability profile, often involving issues like unsafe deserialization or resource exhaustion, differs from the memory-safety-dominated issues prevalent in C/C++ which have historically been a focus of AVR research.
+2.  **Inadequate Existing Benchmarks for Python AVR:** Current Python AVR benchmarks exhibit limitations in their validation methodologies:
+    *   Some rely solely on a proof-of-concept (PoC) exploit to validate a patch. While defeating the exploit is necessary, it is not sufficient. A patch might resolve the security flaw but introduce new bugs or break existing, unrelated functionalityâa phenomenon termed "functional regression." Such patches would be incorrectly credited as successful.
+    *   Other benchmarks incorporate functional tests but only when the upstream project happens to provide them. This leads to inconsistent and incomplete functional validation across different vulnerability instances, still allowing functional regressions to go undetected.
+    *   A consequence of these limitations is that existing evaluations may overfit patches to exploits, failing to ensure overall software integrity after repair.
+3.  **Evaluating Iterative vs. Single-Shot Repair:** The emergence of LLM agents capable of iterative execution, observation of test failures, and subsequent patch revision contrasts with traditional single-shot patch generation methods. A key motivation is to empirically investigate the benefits of this iterative feedback mechanism on real vulnerabilities in Python. The research aims to quantify how much the ability to interact with the project environment and refine edits impacts repair success.
+4.  **Trustworthy Evaluation:** Without a robust validation mechanism, the reported success rates of AVR approaches can be misleading. The motivation is to create a benchmark where "success" is genuinely indicative of a complete and functionally sound repair, thereby making comparative studies more trustworthy.
+
+Therefore, the key objectives are to:
+*   Develop a Python AVR benchmark, named Vul4Py, where every vulnerability instance includes a paired oracle: an exploit oracle (to confirm vulnerability fix) and a comprehensive functional oracle (to confirm preservation of non-security-related functionality).
+*   Utilize Vul4Py to conduct an empirical study comparing different AVR paradigms, including specialized tools, directly prompted LLMs, and general-purpose software engineering agents, to understand their effectiveness and the impact of iterative execution capabilities.
+*   Assess the reliability of the paired oracle design by quantifying how often the functional oracle filters out patches that would otherwise be accepted by an exploit-only validation, and by evaluating the precision of the paired oracle as a proxy for manually confirmed correct repairs.
+
+### 4. Methodology and approach
+
+The research involved two primary components: the construction of the Vul4Py benchmark and an empirical evaluation of various AVR approaches using this benchmark.
+
+**4.1. Vul4Py Benchmark Construction**
+
+The Vul4Py benchmark was constructed through a multi-stage pipeline designed to ensure each entry possesses both an exploit oracle and a functional oracle:
+
+1.  **Candidate Collection from OSV:** The process began by collecting Python advisories from the Open Source Vulnerabilities (OSV) database. Only advisories explicitly indicating a proof-of-concept (PoC) or public exploit reference were retained, as these were more likely to yield an executable exploit oracle.
+2.  **Linking to Fix Commits:** Each retained advisory was checked for a precise link to a single GitHub commit that addressed the vulnerability. This step was crucial for establishing the "vulnerable" and "fixed" revisions necessary for differential validation.
+3.  **Selecting Fixes with Tests:** From the linked fixes, only those commits that added or modified test files were selected. This design choice aimed to leverage developer-authored security tests as the basis for the exploit oracle, grounding it in the project's own conventions.
+4.  **Manual Oracle Validation:** A manual review process was undertaken to confirm the quality and relevance of the identified tests. Each candidate was evaluated against three criteria:
+    *   **Intent of test assertions:** The assertions had to specifically check security-relevant behavior, such as rejection of malicious input, rather than general feature functionality.
+    *   **Relationship to the code fix:** The test had to exercise the exact code paths modified by the fix, demonstrating failure on the vulnerable revision and passing on the fixed one due to the fix itself.
+    *   **Alignment with the OSV description:** The test scenario had to accurately reflect the vulnerability described in the OSV advisory. Only instances satisfying all three criteria were admitted.
+5.  **Reproducible Setup and Execution:** Each accepted instance was packaged with an isolated Python environment, including pinned dependency versions. Installation and test commands were recorded in a `meta.json` file. An instance was only admitted if its oracle was fully reproducible: the exploit test had to consistently fail on the vulnerable revision and pass on the fixed revision, while the functional test suite (the project's non-security tests) had to pass on *both* revisions.
+
+**Benchmark Characteristics:**
+The resulting Vul4Py benchmark comprises 100 real vulnerabilities from 60 distinct open-source projects, covering 60 unique CWE categories. The instances span from 2017 to 2025, with a concentration in recent years (86% from 2023-2025). Python versions provisioned for instances range from CPython 3.6 to 3.11, with 3.11 being dominant. Patch sizes, measured as lines changed in non-test `.py` files by the upstream fix, exhibit a right-skewed distribution, with a median of 65 lines.
+
+**4.2. Empirical Evaluation Approach**
+
+The empirical study aimed to answer two research questions (RQ1 and RQ2) by evaluating six AVR approaches across three categories:
+
+1.  **Specialized AVR Tool:** **APPATCH** [18], an LLM-assisted patch generation system combining adaptive prompting with vulnerability semantics reasoning. It was adapted for Python by using the `tree-sitter` library for static analysis instead of `Joern` to construct system dependence graphs. It used Claude Sonnet 4 as its backbone model.
+2.  **Directly Prompted LLMs:** **GPT-4o** (gpt-4o-2024-08-06) and **Claude Sonnet 4** (claude-sonnet-4-20250514). Both were run with temperature 0 using a standardized prompt template that provided the vulnerable source file, its repo-relative path, the CVE identifier, and localization hints (non-test files and line ranges changed by the human fix).
+3.  **Software Engineering Agents:** **OpenHands** [33], **Trae Agent** [28], and **SWE-agent** [39]. These general-purpose agents operate at repository scope, performing iterative code inspection, execution of shell commands, and patch refinement based on feedback. All agents used Claude Sonnet 4 as the backbone model, with temperature 0, no internet access, a maximum of 100 agent steps, and a cost cap of $3 USD per vulnerability (except Trae Agent, which was only step-limited). Agents were provided with project workspace, hints (CVE ID, localization), and benchmark-specific build/validation commands, with strict constraints against modifying tests or using version control history.
+
+**Evaluation Metrics:**
+Generated patches were assessed using the following metrics:
+*   **Security Test Passes (Sec.):** Number of patches where only the exploit test passed.
+*   **Plausible Patches (Plau.):** Number of patches that passed the full paired oracle (both functional and exploit tests). This was the primary success criterion.
+*   **Correct Patches (Corr.):** Number of plausible patches manually confirmed as semantically equivalent to the human-provided fix by two independent reviewers, with disagreements resolved through discussion.
+*   **Cost:** Mean API spend per instance in US dollars.
+*   **Runtime:** Mean wall-clock seconds per instance.
+
+### 5. Main findings and results
+
+The empirical evaluation on Vul4Py yielded several findings regarding the effectiveness of LLM-based AVR approaches and the reliability of the paired oracle.
+
+**RQ1: How effective are current LLM-based approaches at repairing real Python vulnerabilities?**
+
+The results indicated a clear distinction in repair effectiveness, with software engineering agents significantly outperforming directly prompted LLMs and the specialized tool.
+
+*   **Software Engineering Agents:**
+    *   **OpenHands** produced 43 plausible patches, with 41 confirmed as correct. It had an average cost of $1.32 and average runtime of 490 seconds per instance.
+    *   **Trae Agent** generated 30 plausible patches, with 29 confirmed as correct. Its average cost was $7.52 and average runtime was 5,763 seconds per instance, making it the most expensive and slowest.
+    *   **SWE-agent** produced 24 plausible patches, with 22 confirmed as correct. Its average cost was $1.43 and average runtime was 2,052 seconds per instance.
+*   **Directly Prompted LLMs:**
+    *   **Claude Sonnet 4** generated 5 plausible patches, with 4 confirmed as correct. It had an average cost of $0.05 and average runtime of 6 seconds per instance.
+    *   **GPT-4o** did not produce any plausible or correct patches. It had an average cost of $0.03 and average runtime of 7 seconds per instance.
+*   **Specialized AVR Tool:**
+    *   **APPATCH** produced 2 plausible patches, both confirmed as correct. It had an average cost of $0.05 and average runtime of 93 seconds per instance.
+
+The key observation was that despite using the same class of backbone models and receiving the same localization hints, agents resolved five to ten times more vulnerabilities than non-agent approaches. This performance gap was attributed to the agents' ability to interact with the project, execute tests, observe failures, and iteratively revise their code edits, a capability absent in single-shot patch generation methods. This iterative process, however, came with a significant cost premium, with agents being approximately 26 to 150 times more expensive and substantially slower per instance than direct prompting.
+
+**RQ2: How reliable is the paired oracle as a proxy for correct vulnerability repair?**
+
+The paired oracle demonstrated reliability in both filtering incorrect patches and predicting true correctness.
+
+*   **Functional Oracle's Role in Filtering:** Across all approaches, 119 patches initially passed the exploit-only test. However, the functional half of the paired oracle rejected 15 of these (approximately 12.6%) because they failed the project's non-security test suite. This indicates that an exploit-only oracle would have incorrectly accepted these patches. Most of these filtered patches (14 out of 15) originated from the agents, suggesting that their broader, iterative edits were more prone to disturbing unrelated functionality.
+*   **Plausibility as a Proxy for Correctness:** Of the 104 patches that passed the full paired oracle (i.e., were deemed "plausible"), manual inspection confirmed that 98 (approximately 94%) were semantically equivalent to the original developer's fix. This high precision suggests that the paired oracle is a strong indicator of a genuinely correct repair. The remaining 6 patches were found to be "over-fitted," meaning they passed both the exploit and functional tests but did not address all conditions handled by the developer's fix, which the provided tests did not fully exercise. The drop from plausible to correct patches was minimal for each individual approach, further supporting the oracle's predictive power.
+
+These findings highlight that relying solely on an exploit test is insufficient for AVR, as it fails to catch functional regressions. The paired oracle, by incorporating functional tests, provides a more robust and high-precision evaluation of patch correctness.
+
+### 6. Significance and potential impact
+
+This research makes several contributions to the field of Automated Vulnerability Repair and software engineering.
+
+**1. Establishment of Vul4Py Benchmark:** The creation of Vul4Py addresses a critical gap in the AVR landscape by providing the first Python-specific benchmark where every vulnerability instance is equipped with a mandatory paired oracleâcomprising both an exploit oracle and a functional test suite. This rigorous validation mechanism ensures that accepted patches not only neutralize the security vulnerability but also preserve the program's intended functionality, thereby mitigating functional regressions. This benchmark is publicly available, facilitating transparent and reproducible research.
+
+**2. Empirical Validation of Agentic Approaches:** The empirical study provides evidence for the superior performance of software engineering agents in automated vulnerability repair for Python compared to directly prompted LLMs and specialized vulnerability repair tools. The results demonstrate that the ability of agents to interact with the codebase, execute tests, observe failures, and iteratively refine their patches is a decisive factor in achieving higher repair coverage, even when using the same underlying LLM backbone. This finding suggests a shift in focus for future AVR research and development towards agent-based architectures that leverage dynamic feedback loops.
+
+**3. Validation of Paired Oracle Methodology:** The research empirically validates the necessity and effectiveness of a paired oracle for robust AVR evaluation. It demonstrates that the functional oracle is not redundant; it actively filters out a significant percentage of patches (12.6%) that would otherwise be considered successful by an exploit-only evaluation but introduce functional regressions. Furthermore, the high precision (94%) with which the paired oracle predicts manually confirmed correct patches establishes it as a reliable proxy for assessing true repair quality. This impact extends beyond Python, advocating for comprehensive, dual-criteria validation in AVR benchmarks across programming languages.
+
+**Potential Impact:**
+
+*   **Advancement of AVR Research:** Vul4Py provides a standardized and rigorous platform for evaluating and comparing new AVR techniques for Python, accelerating progress in this area. Researchers can now develop and test their approaches against a benchmark that demands both security and functional correctness.
+*   **Guidance for Tool Development:** The findings offer guidance to developers of automated repair tools. The demonstrated success of agentic approaches suggests that incorporating iterative execution and feedback mechanisms is crucial for building more effective vulnerability repair systems. The higher cost associated with agents also highlights the need for optimizing these systems for efficiency.
+*   **Improved Software Security:** By promoting the development of more effective and reliable AVR tools, this work contributes to the broader goal of improving software security. Automated repair, when reliable, can lead to faster patching of vulnerabilities, reducing the window of exposure for critical software systems.
+*   **Rethinking Benchmarking Practices:** The study's emphasis on functional regression and the high precision of the paired oracle could influence the design of future benchmarks in program repair and other automated software engineering tasks, encouraging more holistic validation criteria.
+
+The authors also outline future work, including scaling the dataset, analyzing failure modes beyond pass/fail, and evaluating open-weight models, which could further broaden the impact and generalizability of these findings.
