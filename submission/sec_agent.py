@@ -460,9 +460,8 @@ TOOL_FUNCS: dict[str, Callable[..., Awaitable[str]]] = {
 # --------------------------------------------------------------------------- #
 
 TRIVIAL_PATTERNS = [
-    re.compile(r"[Cc]reate a file at `([^`]+)` whose entire content is exactly the single word `([^`]+)`"),
-    re.compile(r"[Cc]reate a file at `([^`]+)` whose entire content is exactly `([^`]+)`"),
-    re.compile(r"[Ww]rite `([^`]+)` to `([^`]+)`"),
+    re.compile(r"[Cc]reate (?:a|an) file at [`\"']?(/app/[\w./\-]+|[\w./\-]+)[`\"']?\s+whose entire content is exactly (?:the single word )?[`\"']?([\w]+)[`\"']?"),
+    re.compile(r"[Cc]reate (?:a|an) file [`\"']?([\w./\-]+)[`\"']?\s+(?:at\s+)?whose? content is exactly (?:the single word )?[`\"']?([\w]+)[`\"']?"),
 ]
 
 
@@ -471,9 +470,10 @@ def detect_trivial(instruction: str) -> tuple[str, str] | None:
     for rx in TRIVIAL_PATTERNS:
         m = rx.search(instruction)
         if m:
-            if rx is TRIVIAL_PATTERNS[2]:  # "Write `content` to `path`"
-                return m.group(2), m.group(1)
-            return m.group(1), m.group(2)
+            path, content = m.group(1), m.group(2)
+            if not path.startswith("/"):
+                path = "/app/" + path.lstrip("./")
+            return path, content
     return None
 
 
@@ -1024,10 +1024,14 @@ async def main_async(instruction: str) -> str:
         path, content = trivial
         fp = Path(path) if Path(path).is_absolute() else state.workdir / path
         fp = remap_path(fp)
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content, encoding="utf-8")
-        _log("fastpath", path=str(fp))
-        return f"Fast-path: wrote {fp} with exact content."
+        try:
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            _log("fastpath_failed", error=repr(exc), note="falling back to LLM flow")
+        else:
+            _log("fastpath", path=str(fp))
+            return f"Fast-path: wrote {fp} with exact content."
 
     # 1) classification (mechanical -> LLM fallback)
     kind = classify_mechanical(instruction)
