@@ -2,7 +2,7 @@
 
 Универсальный LLM-агент для соревнования [SecureIntelligent/UniversalAgenticCompetitionPublic](https://github.com/SecureIntelligent/UniversalAgenticCompetitionPublic): аудита уязвимостей, SWE-стиль исправлений, цифровой форензики и CTF-задач на **малых локальных LLM** (qwen3.6-27b и близких), без интернета, с ограниченным бюджетом запросов.
 
-**Английское резюме:** This repo contains a competition-ready cybersecurity agent (`submission/`), 3 runnable + 12 specced synthetic tasks simulating the private task set (MITRE ATT&CK + OWASP Top 10:2025), a local validation harness, and a research digest of 32 AlphaXiv papers (2 rounds) that shaped the design. See `docs/` for details.
+**Английское резюме:** This repo contains a competition-ready cybersecurity agent (`submission/`), 3 runnable + 23 specced synthetic tasks simulating the private task set (MITRE ATT&CK + OWASP Top 10:2025), a local validation harness, and a research digest of 32 AlphaXiv papers (2 rounds) that shaped the design. See `docs/` for details.
 
 ## Структура
 
@@ -10,7 +10,7 @@
 submission/         — пакет сабмита (run.sh + sec_agent.py), кладётся в zip
 synthetic_tasks/    — 3 runnable задачи (fix-insecure-pickle, bruteforce-ssh-forensics, staged-files-flag)
 docs/
-  synthetic-task-specs/ — 12 спецификаций приватных задач (9+ требовалось, сделано 12)
+  synthetic-task-specs/ — 23 спецификации приватных задач (9+ требовалось, сделано 23: дизайн-раунд 1 — 12, дизайн-раунд 2 — 11)
   research.md        — дайджест 14 статей с AlphaXiv + как каждая влияет на дизайн
   architecture.md    — архитектура агента и обоснование решений
   results.md         — протокол локальной валидации
