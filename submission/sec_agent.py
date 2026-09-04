@@ -56,6 +56,9 @@ def _env(name: str, default: str | None = None) -> str | None:
 
 START = time.monotonic()
 REQUEST_COUNT = 0
+TOKENS_IN = 0   # prompt_tokens accumulated across the run (tie-break telemetry)
+TOKENS_OUT = 0  # completion_tokens accumulated across the run
+_EVENTS_FP = None  # lazy handle for SEC_AGENT_EVENTS_FILE (structured JSONL)
 # Test-only: redirect absolute /app paths to a local workdir when /app is unavailable.
 APP_REMAP = _env("SEC_AGENT_PATH_REMAP")
 MODEL_NAME = _env("LOCAL_AGENT_MODEL") or _env("OPENAI_MODEL") or "default"
@@ -100,8 +103,32 @@ def _trunc(text: str, limit: int | None = None) -> str:
     return f"{cut}\n... [truncated {len(text) - limit} chars; use grep/read_file to target content]"
 
 
+def _events_write(payload: dict, line: str | None = None) -> None:
+    """Append an event record to SEC_AGENT_EVENTS_FILE (structured JSONL).
+
+    Never raises: telemetry must not break the run. Adds t_ms (monotonic
+    offset from START) so the harness can build per-phase timelines.
+    """
+    global _EVENTS_FP
+    fp = _env("SEC_AGENT_EVENTS_FILE")
+    if not fp:
+        return
+    try:
+        if _EVENTS_FP is None:
+            _EVENTS_FP = open(fp, "a", encoding="utf-8")
+        rec = dict(payload)
+        rec["t_ms"] = round((time.monotonic() - START) * 1000)
+        if line is None:
+            line = json.dumps(rec, ensure_ascii=False, default=str)
+        _EVENTS_FP.write(line + "\n")
+        _EVENTS_FP.flush()
+    except Exception:
+        pass
+
+
 def _log(event: str, **fields: Any) -> None:
     payload = {"event": event}
+    stdout_every = int(fields.pop("_stdout_every", 1) or 1)
     for key, value in fields.items():
         if any(m in key.lower() for m in SECRET_MARKERS):
             value = "<redacted>"
@@ -109,7 +136,16 @@ def _log(event: str, **fields: Any) -> None:
             value = value[:2000] + "...<snip>"
         payload[key] = value
     try:
-        LOGGER.info(json.dumps(payload, ensure_ascii=False, default=str))
+        line = json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        line = json.dumps({"event": event})
+    # Structured events always reach the JSONL file; stdout stays low-noise
+    # for high-frequency events via _stdout_every.
+    _events_write(payload, line)
+    if stdout_every > 1 and REQUEST_COUNT % stdout_every != 0:
+        return
+    try:
+        LOGGER.info(line)
     except Exception:
         LOGGER.info(json.dumps({"event": event}))
 
@@ -876,8 +912,7 @@ def _make_http_client() -> Any:
                         await asyncio.sleep(wait)
                     self._last = time.monotonic()
             REQUEST_COUNT += 1
-            if REQUEST_COUNT % 10 == 0:
-                _log("llm_requests", n=REQUEST_COUNT)
+            _log("llm_requests", n=REQUEST_COUNT, _stdout_every=10)
             # input-size telemetry: per-role char counts of the outgoing payload
             try:
                 body = json.loads(request.content)
@@ -917,6 +952,18 @@ def _make_http_client() -> Any:
                         if key in strip_fields:
                             data.pop(key)
                             changed = True
+                    # Token accounting (tie-break metric of the competition):
+                    # pull usage out of the OpenAI-schema response. Field names
+                    # avoid the substring "token" so _log does not redact them.
+                    try:
+                        usage = data.get("usage") or {}
+                        if isinstance(usage, dict):
+                            global TOKENS_IN, TOKENS_OUT
+                            TOKENS_IN += int(usage.get("prompt_tokens") or 0)
+                            TOKENS_OUT += int(usage.get("completion_tokens") or 0)
+                            _log("llm_usage", tin=TOKENS_IN, tout=TOKENS_OUT, _stdout_every=50)
+                    except Exception:
+                        pass
                 # Truncation telemetry (arXiv 2605.13076 motivation): a
                 # finish_reason=length on the final answer often means a
                 # truncated deliverable; the json_closer repair path handles
@@ -1433,6 +1480,8 @@ def main() -> None:
     except Exception as exc:
         _log("fatal", error=repr(exc))
         final = f"fatal: {exc!r}"
+    _log("final_usage", requests=REQUEST_COUNT, tin=TOKENS_IN, tout=TOKENS_OUT,
+         wall_s=round(time.monotonic() - START, 1))
     print(final)
 
 
