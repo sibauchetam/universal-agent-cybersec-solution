@@ -813,6 +813,13 @@ def _run_sync_quiet(command: str) -> tuple[int, str]:
 
 
 def verify_deliverable(kind: str, deliverable: str, workdir: Path) -> tuple[bool, str]:
+    if kind == "fix" and not deliverable:
+        # Fix tasks have no file deliverable: done means the visible suite is green.
+        code, text = _run_sync_quiet(
+            "python3 -m pytest tests/ -q --tb=no -p no:cacheprovider 2>&1 | tail -3"
+        )
+        ok = bool(re.search(r"\d+ passed", text)) and "failed" not in text and "error" not in text.lower()
+        return ok, f"pytest: {text.strip()[-140:]}"
     if not deliverable:
         return False, "no deliverable path identified"
     fp = Path(deliverable)
@@ -1066,6 +1073,7 @@ def make_history_compactor(
     max_text_chars: int = 400,
     request_budget: int = 0,
     deliverable: str = "",
+    kind: str = "",
 ) -> Any:
     """pydantic-ai history processor: elides older tool outputs / assistant text so
     per-request input tokens stay bounded on long tasks (ACM paper: -20% tokens).
@@ -1082,21 +1090,26 @@ def make_history_compactor(
     state_req_no = {"n": 0}
 
     def _nudge() -> str | None:
-        if not request_budget or not deliverable:
+        if not request_budget:
             return None
         used = state_req_no["n"]
         frac = used / float(request_budget)
+        if kind == "fix":
+            soft = ("Wrap up investigation. Apply the minimal fix now (replace_in_file / apply_patch), "
+                    "then run_pytest and iterate until green.")
+            hard = ("HARD DEADLINE. Do NOT run any more investigation tools. IMMEDIATELY apply the minimal fix "
+                    "with replace_in_file / apply_patch and run_pytest until green, then stop. Partial fix beats none.")
+        else:
+            target = deliverable or "the required deliverable"
+            soft = (f"Wrap up investigation. Confirm each remaining required field with at most 1-2 targeted "
+                    f"commands, then WRITE the deliverable to '{target}'.")
+            hard = (f"HARD DEADLINE. Do NOT run any more investigation tools. IMMEDIATELY call write_file(path='{target}') "
+                    f"with your CURRENT best values for every required field. Partial but well-formed output beats "
+                    f"nothing. After writing, stop.")
         if frac >= 0.78:
-            return (
-                f"[BUDGET CHECKPOINT {used}/{request_budget}] HARD DEADLINE. Do NOT run any more investigation tools. "
-                f"IMMEDIATELY call write_file(path='{deliverable}') with your CURRENT best values for every required field. "
-                f"Partial but well-formed output beats nothing. After writing, stop."
-            )
+            return f"[BUDGET CHECKPOINT {used}/{request_budget}] {hard}"
         if frac >= 0.55:
-            return (
-                f"[BUDGET CHECKPOINT {used}/{request_budget}] Wrap up investigation. Confirm each remaining required "
-                f"field with at most 1-2 targeted commands, then WRITE the deliverable to '{deliverable}'."
-            )
+            return f"[BUDGET CHECKPOINT {used}/{request_budget}] {soft}"
         return None
 
     def _shorten(content: Any, marker: str) -> str:
@@ -1190,7 +1203,7 @@ async def run_pyai_loop(
         retries=2,
         system_prompt=build_system_prompt(kind),
         model_settings=_model_settings(),
-        **_history_kwargs(make_history_compactor(request_budget=request_budget, deliverable=deliverable, **(compactor_kwargs or {}))),
+        **_history_kwargs(make_history_compactor(request_budget=request_budget, deliverable=deliverable, kind=kind, **(compactor_kwargs or {}))),
     )
 
     # Explicit signatures: pydantic-ai derives tool schemas from type hints,
@@ -1385,10 +1398,14 @@ async def run_openai_fallback(
         if frac >= 0.78 and state.deliverable_hint:
             # Hard wrap-up order as its own user turn — the per-tool marker is
             # too easy for a small model to ignore at end of budget.
-            messages.append({"role": "user", "content":
-                f"[BUDGET CHECKPOINT {used}/{request_budget}] HARD DEADLINE. Do NOT run any more investigation tools. "
-                f"IMMEDIATELY call write_file(path='{state.deliverable_hint}') with your CURRENT best values for every "
-                f"required field. Then stop."})
+            if state.deliverable_hint == "apply-fix-and-pytest":
+                order = ("HARD DEADLINE. Do NOT run any more investigation tools. IMMEDIATELY apply the minimal fix "
+                         "with replace_in_file / apply_patch and run_pytest until green, then stop.")
+            else:
+                order = (f"HARD DEADLINE. Do NOT run any more investigation tools. IMMEDIATELY call "
+                         f"write_file(path='{state.deliverable_hint}') with your CURRENT best values for every "
+                         f"required field. Then stop.")
+            messages.append({"role": "user", "content": f"[BUDGET CHECKPOINT {used}/{request_budget}] {order}"})
     return final or "fallback loop ended"
 
 
@@ -1436,13 +1453,13 @@ async def ensure_deliverable(instruction: str, kind: str, state: AgentState, del
         return True
     if budget_left <= 0 or time_left() <= 30:
         return False
-    fp = Path(deliverable)
+    fp = Path(deliverable) if deliverable else state.workdir
     if not fp.is_absolute():
         fp = state.workdir / fp
     # Best-snapshot (arXiv 2608.18931: sequential refinement can DEGRADE a good
     # draft; keep the healthiest version seen and restore it if repair is worse).
     snap_health, snap_content = 0, ""
-    if fp.exists():
+    if deliverable and fp.exists():
         try:
             snap_content = fp.read_text(encoding="utf-8", errors="replace")
             snap_health = deliverable_health(kind, deliverable, state.workdir)
@@ -1467,7 +1484,8 @@ async def ensure_deliverable(instruction: str, kind: str, state: AgentState, del
     activity_tail = "\n".join(state.activity[-60:]) if state.activity else "(none recorded)"
     repair_instruction = (
         REPAIR_PROMPT.format(reason=reason, err_type=err_type, err_hint=repair_hint(kind, err_type))
-        + f"\nDeliverable path: {deliverable}\n\nTASK INSTRUCTION (for reference):\n{instruction[:2500]}"
+        + (f"\nDeliverable path: {deliverable}" if deliverable else "\nDefinition of done: `python3 -m pytest tests/` fully green (keep public APIs unchanged).")
+        + f"\n\nTASK INSTRUCTION (for reference):\n{instruction[:2500]}"
         + f"\n\nPREVIOUS RUN ACTIVITY (what was already done/found — do NOT repeat it, use it):\n{activity_tail[:6000]}"
     )
     try:
@@ -1549,7 +1567,7 @@ async def main_async(instruction: str) -> str:
             kind = kind2
             requests_used += 1
     deliverable = guess_deliverable(instruction, kind, state.workdir)
-    state.deliverable_hint = deliverable
+    state.deliverable_hint = deliverable or ("apply-fix-and-pytest" if kind == "fix" else "")
     _log("classified", kind=kind, deliverable=deliverable)
 
     # 2) baseline tests for fix-type tasks (mechanical, free)
