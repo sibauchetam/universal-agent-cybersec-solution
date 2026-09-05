@@ -70,7 +70,7 @@ TIME_BUDGET = float(_env("SEC_AGENT_TIME_BUDGET", "540") or 540)
 CMD_TIMEOUT = int(_env("SEC_AGENT_CMD_TIMEOUT", "90") or 90)
 TOOL_CHARS = int(_env("SEC_AGENT_TOOL_OUTPUT_CHARS", "4000") or 4000)
 TEMPERATURE = float(_env("SEC_AGENT_TEMPERATURE", "0.2") or 0.2)
-MAX_TOKENS = int(_env("SEC_AGENT_MAX_TOKENS", "8192") or 8192)
+MAX_TOKENS = int(_env("SEC_AGENT_MAX_TOKENS", "600") or 600)  # default == harness value: one output regime everywhere
 REASONING_EFFORT = _env("SEC_AGENT_REASONING_EFFORT")  # e.g. "none" to suppress qwen thinking
 
 
