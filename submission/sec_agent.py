@@ -692,12 +692,15 @@ PLAN:
 GOAL: minimal secure fix; ALL tests pass; public APIs unchanged.
 INFORMATION: baseline pytest result; vulnerable code paths (grep sinks); how tests call the code.
 DECISION CRITERIA: fix removes the vulnerability AND keeps behavior contracts (routes, schemas, function names); no new dependencies.
+REQUIREMENTS CHECKLIST (do this before coding): re-read the instruction and enumerate EVERY explicit constraint - field names, types, ranges, formats, error behavior. Words like "exactly", "only", "never", "must be rejected", "invalid ... must" define VALIDATION and error behavior, not just the happy path. Example: "JSON with exactly the fields name/priority/params" means payloads with UNKNOWN fields are invalid -> reject them (pydantic: model_config extra="forbid"; manual: compare key sets).
 PLAN:
 1. run_pytest FIRST to capture the baseline before any edit.
 2. grep sinks; read the vulnerable paths; identify the minimal correct fix.
 3. Apply with replace_in_file. Standard fixes: parameterize SQL (db.fetch(query, param)); no shell=True / shlex.join; authorize object ownership; strong crypto; safe deserialization.
-4. run_pytest again - MUST be green. Read typed feedback (failed_tests, error_types_found) and fix precisely; loop until green. If a test fails: read the FULL traceback before editing; fix the cause, not the symptom.
-5. Never rename public functions/models or change response schemas. If the service should be running and checks fail, verify it is up (curl healthz) and inspect launch logs before editing code.""",
+4. Implement validation for EVERY checklist item; unknown/extra fields must be rejected, not ignored; boundary values enforced.
+5. run_pytest again - MUST be green. Read typed feedback (failed_tests, error_types_found) and fix precisely; loop until green. If a test fails: read the FULL traceback before editing; fix the cause, not the symptom.
+6. Adversarial self-test (hidden tests WILL probe these): craft invalid inputs for each checklist item (extra/unknown fields, wrong types, out-of-range values, empty strings, deeply nested params) and confirm each gets a 4xx / explicit rejection - e.g. bash python3 -c with TestClient posting bad blobs. A fix that only handles the happy path is INCOMPLETE.
+7. Never rename public functions/models or change response schemas. If the service should be running and checks fail, verify it is up (curl healthz) and inspect launch logs before editing code.""",
     "forensics": """BLUEPRINT - log forensics (key=value incident report):
 GOAL: every required field exactly as the instruction maps it, in the exact line format.
 INFORMATION: EVERY artifact in the incidents directory - read fully, do not sample; decisive fields hide in any file.
