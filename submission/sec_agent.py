@@ -187,6 +187,14 @@ class AgentState:
         # Repetition-guard ledger: (tool, args-fingerprint) -> [output fingerprints]
         self.call_history: dict[str, list[str]] = {}
         self.loop_strikes: int = 0
+        # Rolling activity log (what was done/found) — given to the repair loop
+        # so it inherits the main run's context instead of starting blind.
+        self.activity: list[str] = []
+
+    def act(self, line: str) -> None:
+        self.activity.append(line[:200])
+        if len(self.activity) > 200:
+            del self.activity[:100]
 
 
 def remap_path(p: Path) -> Path:
@@ -275,12 +283,14 @@ async def _subprocess(command: str, cwd: Path | None, timeout: int) -> tuple[int
 
 
 async def tool_bash(state: AgentState, command: str) -> str:
+    state.act(f"bash: {command}")
     state.tool_calls += 1
     code, text = await _subprocess(command, state.workdir, CMD_TIMEOUT)
     return repetition_guard(state, "bash", command, _trunc(f"[exit {code}] $ {command}\n{text}"))
 
 
 async def tool_read_file(state: AgentState, path: str, start_line: int = 1, max_lines: int = 250) -> str:
+    state.act(f"read_file: {path} [{start_line}+{max_lines}]")
     state.tool_calls += 1
     fp = _resolve_path(path, state)
     if not fp.is_file():
@@ -308,6 +318,7 @@ async def tool_read_file(state: AgentState, path: str, start_line: int = 1, max_
 
 
 async def tool_write_file(state: AgentState, path: str, content: str) -> str:
+    state.act(f"write_file: {path} ({len(content)} chars)")
     state.tool_calls += 1
     fp = _resolve_path(path, state)
     try:
@@ -331,6 +342,7 @@ async def tool_append_file(state: AgentState, path: str, content: str) -> str:
 
 
 async def tool_replace_in_file(state: AgentState, path: str, old_text: str, new_text: str) -> str:
+    state.act(f"replace_in_file: {path}")
     """Exact single-match replacement; returns the closest context when it fails
     (small models copy context imperfectly - show them the real text)."""
     state.tool_calls += 1
@@ -382,6 +394,7 @@ async def tool_apply_patch(state: AgentState, path: str, diff_content: str) -> s
 
 
 async def tool_list_dir(state: AgentState, path: str = ".") -> str:
+    state.act(f"list_dir: {path}")
     state.tool_calls += 1
     root = _resolve_path(path, state)
     if not root.exists():
@@ -396,6 +409,7 @@ async def tool_list_dir(state: AgentState, path: str = ".") -> str:
 
 
 async def tool_grep(state: AgentState, pattern: str, path: str = ".", glob: str = "", case_insensitive: bool = False) -> str:
+    state.act(f"grep: {pattern[:80]} in {path}")
     state.tool_calls += 1
     root = _resolve_path(path, state)
     if shutil.which("rg"):
@@ -446,6 +460,7 @@ def parse_pytest_feedback(raw: str) -> str:
 
 
 async def tool_run_pytest(state: AgentState, paths: str = "tests/") -> str:
+    state.act(f"run_pytest: {paths}")
     state.tool_calls += 1
     args = paths or "tests/"
     cmd = f"python3 -m pytest {args} -q --tb=short -p no:cacheprovider 2>&1 | tail -80"
@@ -1122,51 +1137,66 @@ async def run_pyai_loop(
     # Explicit signatures: pydantic-ai derives tool schemas from type hints,
     # so **kwargs wrappers are NOT viable. Closures over `state` are fine here
     # because the agent instance is created per-run.
+    # Each tool result carries a budget marker (requests used/left) so a small
+    # model can pace itself and WRITES THE DELIVERABLE before the cap hits.
 
-    @agent.tool_plain(retries=2)
-    async def bash(command: str) -> str:
+    from pydantic_ai.tools import RunContext
+
+    def _mark(ctx: Any, out: str) -> str:
+        try:
+            used = int(getattr(ctx.usage, "requests", 0) or 0)
+        except Exception:
+            used = 0
+        left = request_budget - used
+        marker = f"\n[sec-agent budget: {used}/{request_budget} LLM requests used, ~{left} left]"
+        if left <= max(4, request_budget // 4):
+            marker += "\n[sec-agent: LOW BUDGET — stop exploring NOW. Write the deliverable with the information you already have.]"
+        return out + marker
+
+    @agent.tool(retries=2)
+    async def bash(ctx: RunContext[AgentState], command: str) -> str:
         """Run a shell command in the workspace. Use for curl, strings, base64, git, docker, etc."""
-        return await tool_bash(state, command)
+        return _mark(ctx, await tool_bash(state, command))
 
-    @agent.tool_plain(retries=2)
-    async def read_file(path: str, start_line: int = 1, max_lines: int = 250) -> str:
+    @agent.tool(retries=2)
+    async def read_file(ctx: RunContext[AgentState], path: str, start_line: int = 1, max_lines: int = 250) -> str:
         """Read a text file with line numbers. Supports start_line/max_lines for big files."""
-        return await tool_read_file(state, path, start_line, max_lines)
+        return _mark(ctx, await tool_read_file(state, path, start_line, max_lines))
 
-    @agent.tool_plain(retries=2)
-    async def write_file(path: str, content: str) -> str:
+    @agent.tool(retries=2)
+    async def write_file(ctx: RunContext[AgentState], path: str, content: str) -> str:
         """Create/overwrite a file with exact content (deliverable reports, flag files)."""
-        return await tool_write_file(state, path, content)
+        return _mark(ctx, await tool_write_file(state, path, content))
 
-    @agent.tool_plain(retries=2)
-    async def append_file(path: str, content: str) -> str:
+    @agent.tool(retries=2)
+    async def append_file(ctx: RunContext[AgentState], path: str, content: str) -> str:
         """Append content to an existing file."""
-        return await tool_append_file(state, path, content)
+        return _mark(ctx, await tool_append_file(state, path, content))
 
-    @agent.tool_plain(retries=2)
-    async def replace_in_file(path: str, old_text: str, new_text: str) -> str:
+    @agent.tool(retries=2)
+    async def replace_in_file(ctx: RunContext[AgentState], path: str, old_text: str, new_text: str) -> str:
         """PREFERRED way to edit code: replace one exact old_text fragment with new_text. Copy old_text verbatim from read_file output."""
-        return await tool_replace_in_file(state, path, old_text, new_text)
+        return _mark(ctx, await tool_replace_in_file(state, path, old_text, new_text))
 
-    @agent.tool_plain(retries=2)
-    async def apply_patch(path: str, diff_content: str) -> str:
+    @agent.tool(retries=2)
+    async def apply_patch(ctx: RunContext[AgentState], path: str, diff_content: str) -> str:
         """Apply a unified diff to a file (fallback for big multi-line edits)."""
-        return await tool_apply_patch(state, path, diff_content)
+        return _mark(ctx, await tool_apply_patch(state, path, diff_content))
 
-    @agent.tool_plain(retries=2)
-    async def list_dir(path: str = ".") -> str:
+    @agent.tool(retries=2)
+    async def list_dir(ctx: RunContext[AgentState], path: str = ".") -> str:
         """List files up to depth 3 with find (no sizes)."""
-        return await tool_list_dir(state, path)
+        return _mark(ctx, await tool_list_dir(state, path))
 
-    @agent.tool_plain(retries=2)
-    async def grep(pattern: str, path: str = ".", glob: str = "", case_insensitive: bool = False) -> str:
+    @agent.tool(retries=2)
+    async def grep(ctx: RunContext[AgentState], pattern: str, path: str = ".", glob: str = "", case_insensitive: bool = False) -> str:
         """Search file contents (ripgrep/grep). Great first move: hunt sinks like execute(, eval(, subprocess, pickle.loads, jwt.decode."""
-        return await tool_grep(state, pattern, path, glob, case_insensitive)
+        return _mark(ctx, await tool_grep(state, pattern, path, glob, case_insensitive))
 
-    @agent.tool_plain(retries=2)
-    async def run_pytest(paths: str = "tests/") -> str:
+    @agent.tool(retries=2)
+    async def run_pytest(ctx: RunContext[AgentState], paths: str = "tests/") -> str:
         """Run pytest in the workspace; returns typed feedback (status, failed tests, error types)."""
-        return await tool_run_pytest(state, paths)
+        return _mark(ctx, await tool_run_pytest(state, paths))
 
     first = build_first_message(instruction, kind, state.workdir, baseline)
     limits = UsageLimits(request_limit=request_budget)
@@ -1223,7 +1253,7 @@ async def run_openai_fallback(
         {"role": "user", "content": build_first_message(instruction, kind, state.workdir, baseline)},
     ]
     final = ""
-    for _ in range(request_budget):
+    for turn in range(request_budget):
         if time_left() <= 20:
             break
         _shrink_history(messages)
@@ -1242,6 +1272,11 @@ async def run_openai_fallback(
             # provider errors mid-request; retrying the same turn is correct.
             _log("fallback_empty_choices")
             continue
+        used = turn + 1
+        left = request_budget - used
+        budget_marker = f"\n[sec-agent budget: {used}/{request_budget} LLM requests used, ~{left} left]"
+        if left <= max(4, request_budget // 4):
+            budget_marker += "\n[sec-agent: LOW BUDGET — stop exploring NOW. Write the deliverable with the information you already have.]"
         msg = choices[0].message
         if msg.content:
             final = msg.content
@@ -1285,7 +1320,7 @@ async def run_openai_fallback(
                     result = f"ERROR: {parse_err}"
             except Exception as exc:
                 result = f"ERROR: tool raised {exc!r}"
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result[:TOOL_CHARS]})
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result[:TOOL_CHARS] + budget_marker})
     return final or "fallback loop ended"
 
 
@@ -1361,17 +1396,19 @@ async def ensure_deliverable(instruction: str, kind: str, state: AgentState, del
             _log("json_closer_failed", error=repr(exc))
     _log("repair_needed", reason=reason)
     err_type = attribute_error(kind, reason)
+    activity_tail = "\n".join(state.activity[-60:]) if state.activity else "(none recorded)"
     repair_instruction = (
         REPAIR_PROMPT.format(reason=reason, err_type=err_type, err_hint=repair_hint(kind, err_type))
         + f"\nDeliverable path: {deliverable}\n\nTASK INSTRUCTION (for reference):\n{instruction[:2500]}"
+        + f"\n\nPREVIOUS RUN ACTIVITY (what was already done/found — do NOT repeat it, use it):\n{activity_tail[:6000]}"
     )
     try:
-        await run_pyai_loop(repair_instruction, kind, state, min(6, budget_left), "")
+        await run_pyai_loop(repair_instruction, kind, state, min(10, budget_left), "")
     except Exception as exc:
         import traceback as _tb
         _log("repair_loop_failed", error=repr(exc), tb=_tb.format_exc()[-2000:])
         try:
-            await run_openai_fallback(repair_instruction, kind, state, min(4, budget_left), "")
+            await run_openai_fallback(repair_instruction, kind, state, min(6, budget_left), "")
         except Exception as exc2:
             _log("repair_fallback_failed", error=repr(exc2))
     ok, _ = verify_deliverable(kind, deliverable, state.workdir)
@@ -1451,7 +1488,10 @@ async def main_async(instruction: str) -> str:
 
     # 3) main loop (per-minute rate limits get patient retry; daily caps fail fast;
     #    413 ITPM -> pause + aggressive compaction; other errors -> fallback loop)
-    budget_main = MAX_REQUESTS - requests_used
+    # Reserve a slice of the request budget for post-hoc repair so a main loop
+    # that burns everything on exploration can still have its deliverable fixed.
+    REPAIR_RESERVE = 10
+    budget_main = MAX_REQUESTS - requests_used - REPAIR_RESERVE
     final = ""
     aggressive = False
     for attempt in range(4):
@@ -1499,7 +1539,9 @@ async def main_async(instruction: str) -> str:
             break
 
     # 4) mechanical verification + repair
-    remaining = MAX_REQUESTS - requests_used
+    remaining = MAX_REQUESTS - requests_used - REPAIR_RESERVE
+    if remaining < 0:
+        remaining = 0
     await ensure_deliverable(instruction, kind, state, deliverable, remaining)
 
     _log("done", kind=kind, tool_calls=state.tool_calls, wall_s=round(time.monotonic() - START, 1))

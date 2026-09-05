@@ -498,7 +498,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks", required=True)
     parser.add_argument("--token-idx", type=int, default=0)
-    parser.add_argument("--max-requests", type=int, default=25)
+    parser.add_argument("--max-requests", type=int, default=45)
     parser.add_argument("--time-budget", type=int, default=0,
                         help="override per-task timeouts; 0 = use official 600s")
     parser.add_argument("--provider", choices=sorted(PROVIDER_BASES), default="openrouter")
