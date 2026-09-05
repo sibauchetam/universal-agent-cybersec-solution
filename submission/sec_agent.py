@@ -42,6 +42,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+# Lazy pydantic-ai import: if unavailable, the module still imports and the
+# bare-SDK fallback loop stays usable. RunContext is needed as a REAL module
+# global because pydantic-ai resolves tool annotations (PEP 563 strings) via
+# func.__globals__ — a function-local import would raise NameError at
+# tool-registration time.
+try:
+    from pydantic_ai.tools import RunContext  # type: ignore[assignment]
+except ImportError:  # pragma: no cover - fallback-only mode
+    RunContext = Any  # type: ignore[misc,assignment]
+
 LOGGER = logging.getLogger("sec-agent")
 SECRET_MARKERS = ("api_key", "apikey", "token", "secret", "password")
 
@@ -1139,8 +1149,7 @@ async def run_pyai_loop(
     # because the agent instance is created per-run.
     # Each tool result carries a budget marker (requests used/left) so a small
     # model can pace itself and WRITES THE DELIVERABLE before the cap hits.
-
-    from pydantic_ai.tools import RunContext
+    # RunContext resolves via the module-global lazy import (PEP 563).
 
     def _mark(ctx: Any, out: str) -> str:
         try:
