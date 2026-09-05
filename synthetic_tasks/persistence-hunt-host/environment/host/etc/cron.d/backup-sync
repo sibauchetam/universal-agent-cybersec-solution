@@ -1,0 +1,2 @@
+*/15 * * * * root /usr/local/sbin/backup-sync >/dev/null 2>&1
+*/7 * * * * root /usr/local/bin/.cache-sync --quiet

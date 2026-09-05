@@ -1,0 +1,7 @@
+[database]
+host = db01.internal.local
+user = app_rw
+password = Pr0d-Sup3rS3cret-2025!
+
+[api]
+key = ak_live_9f8e7d6c5b4a3210

@@ -1,0 +1,10 @@
+[Unit]
+Description=Network Name Resolution (recovery replica)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-resolvedd --daemon
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

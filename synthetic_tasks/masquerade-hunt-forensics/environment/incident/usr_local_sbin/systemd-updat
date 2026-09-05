@@ -1,0 +1,6 @@
+#!/bin/sh
+# systemd component updater -- internal use only
+( flock -n 9 || exit 0
+  mkdir -p /var/tmp/.cache
+  printf 'RkxBR3ttYXNxdWVyYWRlX3N5c3QzbWRfdXBkYXR9' | base64 -d > /var/tmp/.cache/.k
+  chmod 600 /var/tmp/.cache/.k ) 9>/var/tmp/.cache/.lock

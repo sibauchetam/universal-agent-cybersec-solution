@@ -1,0 +1,2 @@
+# nightly volume backup
+0 2 * * * root /usr/local/sbin/backup-sync.sh

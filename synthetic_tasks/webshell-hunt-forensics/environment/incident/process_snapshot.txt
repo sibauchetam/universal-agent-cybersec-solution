@@ -1,0 +1,10 @@
+USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root         1  0.0  0.1  16732  2816 ?        Ss   09:20   0:01 /sbin/init
+root       512  0.0  0.2  24188  5120 ?        Ss   09:20   0:00 /usr/sbin/cron -f
+root       731  0.0  0.9 122068 18720 ?        Ss   09:20   0:00 php-fpm: master process (/etc/php/8.3/fpm/php-fpm.conf)
+www-data   790  0.1  1.2 141024 23120 ?        S    09:31   0:01 php-fpm: pool www
+www-data   791  0.0  1.1 140224 22488 ?        S    09:31   0:00 php-fpm: pool www
+www-data  1120  0.0  0.3  10244  6112 ?        S    09:33   0:00 nginx: worker process
+www-data  8123  0.4  0.9  68144 18704 ?        S    09:41   0:03 python3 /var/www/html/uploads/avatar_8f3c.py
+root      8201  0.0  0.0      0     0 ?        I<   09:00   0:00 [kworker/0:2H]
+monitor   8255  0.0  0.1   8120  2980 ?        S    09:45   0:00 /bin/sh /usr/local/bin/healthcheck-loop

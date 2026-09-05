@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/fix-command-injection-export"
+description = "Fix OS command injection in a FastAPI report exporter that shells out to a rendering tool."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "command-injection", "owasp-a03", "cwe-78", "fastapi", "fix"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

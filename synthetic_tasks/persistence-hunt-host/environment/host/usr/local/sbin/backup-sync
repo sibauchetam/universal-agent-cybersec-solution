@@ -1,0 +1,3 @@
+#!/bin/sh
+# rotate nightly backups to the archive filer
+rsync -a /var/backups/ archive:/vol/backup/

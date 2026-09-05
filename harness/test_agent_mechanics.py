@@ -104,8 +104,10 @@ def test_blueprints_have_paper_structure():
         for section in ("GOAL:", "INFORMATION", "DECISION CRITERIA:", "PLAN:"):
             assert section in bp, f"{kind} missing {section}"
         # compactness: blueprint ships in every request -> keep bounded
-        # (round-2 practices added ~150 chars of evidence/anti-merge rules)
-        assert len(bp) < 1700, f"{kind} blueprint too long: {len(bp)}"
+        # v2-validated: fix blueprint grew to ~2075 chars (requirements
+        # checklist + adversarial self-test) and solved 8/8 at 51 req max;
+        # cap guards against unbounded prompt growth, not against v2 size.
+        assert len(bp) < 2200, f"{kind} blueprint too long: {len(bp)}"
 
 
 def test_build_system_prompt_contains_blueprint():

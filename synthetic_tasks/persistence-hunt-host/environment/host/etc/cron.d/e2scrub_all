@@ -1,0 +1,2 @@
+# monthly ext4 online scrub of all filesystems
+24 0 * * 3 root test -x /usr/sbin/e2scrub_all && /usr/sbin/e2scrub_all REQUIRES_SERVICE=lvm2-lockd

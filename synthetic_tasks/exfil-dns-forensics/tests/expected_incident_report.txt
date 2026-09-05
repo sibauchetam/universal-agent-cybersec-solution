@@ -1,0 +1,5 @@
+exfil_domain=d7data.example.net
+exfil_file=/tmp/.archive/dbexport.bin
+exfil_chunks=16
+exfil_bytes=512
+exfil_flag=flag{dn5_3xf1l_h4rd}

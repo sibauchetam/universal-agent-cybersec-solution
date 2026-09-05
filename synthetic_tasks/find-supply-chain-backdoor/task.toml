@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/find-supply-chain-backdoor"
+description = "Audit a Python service's dependency and vendoring hygiene for supply-chain failures: typosquat package, install-time backdoor hook, unpinned deps, HTTP package index. Report findings as JSON."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "owasp-a03", "supply-chain", "typosquat", "setup.py", "unpinned", "audit"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

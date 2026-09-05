@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/find-ssrf-webhook"
+description = "Audit a FastAPI webhook gateway for server-side request forgery and report findings in machine-readable JSON."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "ssrf", "owasp-a10", "fastapi", "bug-bounty", "audit", "report"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

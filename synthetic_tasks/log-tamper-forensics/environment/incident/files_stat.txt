@@ -1,0 +1,17 @@
+  File: /var/log/auth.log
+  Size: 612             Blocks: 8          IO Block: 4096   regular file
+Device: 802h/2050d      Inode: 5110234     Links: 1
+Access: (0640/-rw-r-----)  Uid: (  101/syslog)   Gid: (  104/adm)
+Access: 2026-04-11 02:20:11.102000000 +0000
+Modify: 2026-04-11 02:16:31.844999000 +0000
+Change: 2026-04-11 02:16:31.845000000 +0000
+ Birth: 2026-03-02 09:14:02.310587000 +0000
+
+  File: /var/backups/ledger-export-manifest
+  Size: 1282            Blocks: 8          IO Block: 4096   regular file
+Device: 802h/2050d      Inode: 5110455     Links: 1
+Access: (0600/-rw-------)  Uid: ( 1000/  mreese)   Gid: ( 1000/  mreese)
+Access: 2026-04-11 02:17:10.552000000 +0000
+Modify: 2026-03-29 08:00:00.000000000 +0000
+Change: 2026-04-11 02:17:02.110000000 +0000
+ Birth: 2026-01-19 14:41:27.904113000 +0000

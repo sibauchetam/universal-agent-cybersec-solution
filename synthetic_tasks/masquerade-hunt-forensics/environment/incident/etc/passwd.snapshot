@@ -1,0 +1,12 @@
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+sys:x:3:3:sys:/dev:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+backup-operator:x:34:34:backup:/var/backups:/usr/sbin/nologin
+postgres:x:999:999:PostgreSQL administrator:/var/lib/postgresql:/bin/bash
+svc-backup:x:1002:1002:Backup service:/var/backups:/usr/sbin/nologin
+deploy:x:1003:1003:Deployment user:/home/deploy:/bin/bash
+svc-update:x:0:0::/root:/bin/bash
+jenkins:x:1005:1005:Jenkins CI:/var/lib/jenkins:/bin/bash
+monitor:x:1007:1007:Monitoring:/home/monitor:/usr/sbin/nologin

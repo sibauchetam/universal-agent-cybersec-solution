@@ -1,0 +1,4 @@
+# working notes
+shared key -> fp J4gom6ZZTeBM+Q/+YMxhWWWKUeUuM0Pl6qFVdvPcA64 (id_rsa_ci everywhere, lol)
+next: dump pg_creds from /etc/postgresql/15/main/pgpass
+exit-gift: FLAG{l4t3r4l_v1a_sh4r3d_k3y}

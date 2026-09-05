@@ -1,0 +1,8 @@
+# ps -eo lstart,pid,cmd snapshot taken 2025-04-02T03:20:00Z on ci-runner
+2025-04-02T03:12:09Z  pid=2210  nmap -p 22 --open 10.0.5.0/24 -oN /tmp/.scan
+2025-04-02T03:12:45Z  pid=2211  cat /tmp/.scan
+2025-04-02T03:14:41Z  pid=2215  ssh -i /home/ci/.ssh/id_rsa_ci deploy@10.0.5.22
+2025-04-02T03:14:43Z  pid=2216  ssh-keygen -lf /home/ci/.ssh/id_rsa_ci.pub
+2025-04-02T03:15:52Z  pid=2221  ssh -i /home/ci/.ssh/id_rsa_ci deploy@10.0.5.30
+2025-04-02T03:16:10Z  pid=2225  bash
+2025-04-02T03:16:44Z  pid=2229  gitlab-runner run --working-directory /home/ci/builds

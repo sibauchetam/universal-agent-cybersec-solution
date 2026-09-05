@@ -188,6 +188,23 @@ def v_static_sqli_fix(workdir: Path) -> tuple[bool, str]:
     return True, "ok (STATIC check; live-service regression not runnable locally)"
 
 
+def v_static_sqli_login_fix(workdir: Path) -> tuple[bool, str]:
+    """STATIC fidelity for fix-sqli-login (sibling of v_static_sqli_fix):
+    official verifier boots PostgreSQL + uvicorn + hidden pytest; no local
+    postgres, so we check the vulnerable f-string login query is gone and a
+    parameterized form is present. Necessary but NOT sufficient locally."""
+    auth = workdir / "routers" / "auth.py"
+    if not auth.exists():
+        return False, "routers/auth.py missing"
+    src = auth.read_text(encoding="utf-8", errors="replace")
+    if "WHERE username = '{req.username}'" in src or (
+            "f\"SELECT" in src and "fetchrow(query)" in src):
+        return False, "vulnerable f-string login query remains"
+    if "$1" not in src or "$2" not in src:
+        return False, "no parameterized query ($1/$2) found in auth.py"
+    return True, "ok (STATIC check; live-service regression not runnable locally)"
+
+
 def v_flag(workdir: Path, flag: str) -> tuple[bool, str]:
     if (workdir / "flag.txt").exists() and (workdir / "flag.txt").read_text(encoding="utf-8", errors="replace").strip() == flag:
         return True, "ok"
@@ -326,6 +343,13 @@ TASKS = {
         "fidelity": "static-only",  # official runs live service + postgres; locally impossible
         "timeout": DEFAULT_AGENT_TIMEOUT,
     },
+    "fix-sqli-login": {
+        "instruction": (REPO / "local_task/fix-sqli-login/instruction.md").read_text().strip(),
+        "workdir": lambda dst: build_app_workdir(REPO / "local_task/fix-sqli-login/environment/app", dst),
+        "verify": v_static_sqli_login_fix,
+        "fidelity": "static-only",  # official runs live service + postgres; locally impossible
+        "timeout": DEFAULT_AGENT_TIMEOUT,
+    },
     # ---------------- synthetic (simulated private set) ----------------
     "syn-fix-insecure-pickle": {
         "instruction": (SYN / "fix-insecure-pickle/instruction.md").read_text().strip(),
@@ -349,6 +373,28 @@ TASKS = {
         "timeout": DEFAULT_AGENT_TIMEOUT,
     },
 }
+
+# ----------- synthetic batches A-D (simulated private set, 20 tasks) -----------
+# Merge verifier_batch_{a,b,c,d}.TASKS built from docs/synthetic-task-specs
+# (TASK-01..06, 09..11, 13..23). Normalization: batch A stores instruction as a
+# Path (its docstring documents the older contract); run_task passes
+# cfg["instruction"] as an argv element, so it must be a str here.
+import importlib.util as _importlib_util
+
+_BATCH_MODULES = ("verifier_batch_a", "verifier_batch_b", "verifier_batch_c",
+                  "verifier_batch_d")
+
+for _batch_name in _BATCH_MODULES:
+    _spec = _importlib_util.spec_from_file_location(
+        _batch_name, Path(__file__).resolve().parent / f"{_batch_name}.py")
+    _mod = _importlib_util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    for _key, _cfg in _mod.TASKS.items():
+        assert _key not in TASKS, f"duplicate task key: {_key}"
+        _cfg = dict(_cfg)
+        if isinstance(_cfg.get("instruction"), Path):
+            _cfg["instruction"] = _cfg["instruction"].read_text(encoding="utf-8").strip()
+        TASKS[_key] = _cfg
 
 
 # --------------------------- runner --------------------------- #

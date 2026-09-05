@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/impair-defenses-exfil-forensics"
+description = "Correlate a process-audit log, a surviving kernel-audit channel and a proxy log: identify which defense was impaired, when, the HTTPS exfiltration destination, exact bytes sent and a staged flag. Strict key=value report."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "hard"
+category = "security"
+tags = ["local", "mitre-t1562.001", "t1041", "impair-defenses", "exfiltration", "proxy", "forensics"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/lateral-movement-forensics"
+description = "Correlate SSH auth logs from three hosts and a process snapshot to reconstruct an attacker's lateral movement: discovery tooling, source host, shared key fingerprint, pivot order. Strict key=value report."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "mitre-t1021.004", "t1046", "ssh", "lateral-movement", "forensics"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

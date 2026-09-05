@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+APP_DIR="${APP_DIR:-/app}"
+export APP_DIR
 python3 - <<'PYEOF'
 import pathlib
 
-f = pathlib.Path("/app/routers/jobs.py")
+f = pathlib.Path(__import__("os").environ["APP_DIR"] + "/routers/jobs.py")
 src = f.read_text()
 src = src.replace("import base64, pickle\n", "import base64\nimport json\n", 1)
 start = src.index('@router.post("/jobs/import")')
@@ -34,6 +36,6 @@ src = src[:start] + fixed + src[end:]
 f.write_text(src)
 print("Patched /app/routers/jobs.py")
 PYEOF
-cd /app
-pytest tests/ -q
+cd "$APP_DIR"
+PYTHONPATH="$APP_DIR" pytest tests/ -q
 echo "All tests pass."

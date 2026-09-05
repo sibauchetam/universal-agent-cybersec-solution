@@ -1,0 +1,3 @@
+Capture window 2026-07-02T21:10:00Z-21:25:00Z on the egress resolver.
+TXT payloads are hex-encoded raw file bytes (no compression, no encryption).
+Retransmitted queries are byte-identical duplicates of an earlier seq.

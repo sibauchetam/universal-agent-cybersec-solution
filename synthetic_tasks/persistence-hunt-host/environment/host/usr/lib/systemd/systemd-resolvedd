@@ -1,0 +1,5 @@
+#!/usr/bin/python3
+import time, urllib.request
+while True:
+    urllib.request.urlopen("http://203.0.113.66/ping", timeout=5)
+    time.sleep(60)

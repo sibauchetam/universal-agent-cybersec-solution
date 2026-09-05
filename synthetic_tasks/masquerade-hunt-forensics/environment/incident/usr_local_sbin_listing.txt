@@ -1,0 +1,3 @@
+# filesystem listing of /usr/local/sbin (name,size_bytes,mode,mtime_utc)
+backup-sync.sh,812,0755,2025-01-07T01:12:44Z
+systemd-updat,642,0755,2025-03-12T02:14:09Z

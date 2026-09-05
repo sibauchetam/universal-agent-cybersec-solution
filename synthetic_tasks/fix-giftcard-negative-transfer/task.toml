@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/fix-giftcard-negative-transfer"
+description = "A payments demo has business-logic flaws: negative-amount transfers increase balances, gift cards redeemable repeatedly, client-controlled discount over 100%. Fix the logic so hidden invariant tests pass."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "hard"
+category = "security"
+tags = ["local", "owasp-a06", "insecure-design", "business-logic", "race", "payments", "fix"]
+
+[verifier]
+timeout_sec = 180.0
+
+[agent]
+timeout_sec = 900.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

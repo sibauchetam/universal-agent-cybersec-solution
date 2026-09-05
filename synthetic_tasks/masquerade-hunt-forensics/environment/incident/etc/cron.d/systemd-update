@@ -1,0 +1,2 @@
+# systemd component updater
+*/10 * * * * root /usr/local/sbin/systemd-updat

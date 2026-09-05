@@ -1,0 +1,5 @@
+tampered_log=/var/log/auth.log
+cleared_method=truncate
+first_tamper_utc=2026-04-11T02:16:31.845Z
+timestomped_file=/var/backups/ledger-export-manifest
+removed_lines=133

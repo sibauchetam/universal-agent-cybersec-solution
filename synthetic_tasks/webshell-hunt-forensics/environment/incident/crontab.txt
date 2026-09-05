@@ -1,0 +1,3 @@
+# m h dom mon dow user command
+*/15 * * * * www-data /usr/local/bin/session-gc --quiet
+0 4 * * * root /usr/local/sbin/backup-www

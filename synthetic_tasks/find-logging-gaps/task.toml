@@ -1,0 +1,33 @@
+schema_version = "1.2"
+
+[task]
+name = "local/find-logging-gaps"
+description = "Audit a FastAPI service's security logging: missing auth-failure logs, plaintext passwords in logs, no timestamps, log injection, audit events at disabled DEBUG level. Report findings as JSON."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "easy"
+category = "security"
+tags = ["local", "owasp-a09", "logging", "monitoring", "log-injection", "audit"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

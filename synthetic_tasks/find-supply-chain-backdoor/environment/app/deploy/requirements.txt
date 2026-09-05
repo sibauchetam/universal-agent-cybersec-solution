@@ -1,0 +1,5 @@
+# production pins - do not edit
+fastapi                    # unpinned by ops request
+reqeusts==2.31.0
+jinja2==2.11.3
+--extra-index-url http://pypi-mirror.internal.local/simple
