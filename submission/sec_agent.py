@@ -1075,6 +1075,18 @@ def _model_settings() -> Any:
     return OpenAIChatModelSettings(**kwargs)
 
 
+def _history_kwargs(processor: Any) -> dict[str, Any]:
+    """pydantic-ai 1.x (>=1.44, acp image): Agent(history_processors=[...]).
+    pydantic-ai 2.x: same feature exposed as capabilities=[ProcessHistory(...)].
+    Detect once per call; both accept a plain sync list->list processor."""
+    import inspect
+    from pydantic_ai import Agent
+    if "history_processors" in inspect.signature(Agent.__init__).parameters:
+        return {"history_processors": [processor]}
+    from pydantic_ai.capabilities import ProcessHistory
+    return {"capabilities": [ProcessHistory(processor)]}
+
+
 async def run_pyai_loop(
     instruction: str,
     kind: str,
@@ -1093,7 +1105,7 @@ async def run_pyai_loop(
         retries=2,
         system_prompt=build_system_prompt(kind),
         model_settings=_model_settings(),
-        history_processors=[make_history_compactor(**(compactor_kwargs or {}))],
+        **_history_kwargs(make_history_compactor(**(compactor_kwargs or {}))),
     )
 
     # Explicit signatures: pydantic-ai derives tool schemas from type hints,
@@ -1343,7 +1355,8 @@ async def ensure_deliverable(instruction: str, kind: str, state: AgentState, del
     try:
         await run_pyai_loop(repair_instruction, kind, state, min(6, budget_left), "")
     except Exception as exc:
-        _log("repair_loop_failed", error=repr(exc))
+        import traceback as _tb
+        _log("repair_loop_failed", error=repr(exc), tb=_tb.format_exc()[-2000:])
         try:
             await run_openai_fallback(repair_instruction, kind, state, min(4, budget_left), "")
         except Exception as exc2:
