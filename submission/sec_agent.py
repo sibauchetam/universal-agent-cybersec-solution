@@ -73,6 +73,15 @@ TOOL_CHARS = int(_env("SEC_AGENT_TOOL_OUTPUT_CHARS", "4000") or 4000)
 TEMPERATURE = float(_env("SEC_AGENT_TEMPERATURE", "0.2") or 0.2)
 MAX_TOKENS = int(_env("SEC_AGENT_MAX_TOKENS", "600") or 600)  # default == harness value: one output regime everywhere
 REASONING_EFFORT = _env("SEC_AGENT_REASONING_EFFORT")  # e.g. "none" to suppress qwen thinking
+# qwen3.6 is a thinking model: with max_tokens=600 its chain-of-thought can eat the
+# whole output budget BEFORE any text/tool-call is emitted -> pydantic-ai raises
+# UnexpectedModelBehavior (bare SDK just wastes the turn). Default: disable thinking
+# via OpenRouter unified `reasoning` param; SEC_AGENT_REASONING=0 to re-enable.
+SUPPRESS_REASONING = (_env("SEC_AGENT_REASONING", "1") or "1").strip().lower() not in ("0", "false", "no")
+
+
+def _reasoning_extra_body() -> dict[str, Any]:
+    return {"reasoning": {"enabled": False}} if SUPPRESS_REASONING else {}
 
 
 def _resolve_workdir() -> Path:
@@ -1072,6 +1081,8 @@ def _model_settings() -> Any:
     kwargs: dict[str, Any] = {"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS}
     if REASONING_EFFORT:
         kwargs["openai_reasoning_effort"] = REASONING_EFFORT
+    if SUPPRESS_REASONING:
+        kwargs["extra_body"] = {"reasoning": {"enabled": False}}
     return OpenAIChatModelSettings(**kwargs)
 
 
@@ -1223,6 +1234,7 @@ async def run_openai_fallback(
             tool_choice="auto",
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
+            extra_body=_reasoning_extra_body(),
         )
         choices = getattr(response, "choices", None) or []
         if not choices:
@@ -1303,6 +1315,7 @@ async def classify_with_llm(instruction: str) -> str:
             ],
             temperature=0.0,
             max_tokens=8,
+            extra_body=_reasoning_extra_body(),
         )
         ch = getattr(response, "choices", None) or []
         word = ((ch[0].message.content if ch else None) or "").strip().lower()
@@ -1462,6 +1475,9 @@ async def main_async(instruction: str) -> str:
                 _log("itpm_retry", note="413: pausing 65s, restarting with aggressive compaction")
                 aggressive = True
                 await asyncio.sleep(min(65.0, max(20.0, time_left() - 120)))
+                continue
+            if "token limit" in repr(exc) and "before any response" in repr(exc) and attempt < 3 and time_left() > 90:
+                _log("output_truncated_retry", note="finish_reason=length before any response; restarting primary")
                 continue
             conn_error = ("Connection error" in repr(exc) or "ProxyError" in repr(exc)
                           or "ConnectError" in repr(exc))
