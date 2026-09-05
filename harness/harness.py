@@ -48,15 +48,24 @@ PROVIDER_BASES = {
     "groq": os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
     "openrouter": os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 }
-MODEL = os.environ.get("LOCAL_AGENT_MODEL", "qwen/qwen3.6-27b")
-TOKENS = [
-    t for t in (
-        os.environ.get("GROQ_API_KEY_1"),
-        os.environ.get("GROQ_API_KEY_2"),
-        os.environ.get("OPENROUTER_API_KEY"),
-    ) if t
-]
-PROXY = os.environ.get("GROQ_PROXY", "")
+# Provider-scoped defaults: a Groq key must never authenticate an OpenRouter
+# run and vice versa (mismatched key -> opaque 401); model names also differ
+# per provider serving.
+DEFAULT_MODELS = {
+    "groq": "qwen/qwen3.6-27b",
+    "openrouter": "qwen/qwen3.6-35b-a3b",
+}
+PROVIDER_KEY_VARS = {
+    "groq": ("GROQ_API_KEY_1", "GROQ_API_KEY_2"),
+    "openrouter": ("OPENROUTER_API_KEY",),
+}
+MODEL = os.environ.get("LOCAL_AGENT_MODEL", "")  # resolved per-provider in main()
+PROXY = ""  # resolved per-provider in main(): GROQ_PROXY / OPENROUTER_PROXY
+
+
+def _resolve_tokens(provider: str) -> list[str]:
+    """API tokens for THIS provider only (no cross-provider key leakage)."""
+    return [v for v in (os.environ.get(k) for k in PROVIDER_KEY_VARS[provider]) if v]
 
 DEFAULT_AGENT_TIMEOUT = 600  # official task.toml agent.timeout_sec
 
@@ -492,14 +501,20 @@ def main() -> None:
     parser.add_argument("--max-requests", type=int, default=25)
     parser.add_argument("--time-budget", type=int, default=0,
                         help="override per-task timeouts; 0 = use official 600s")
-    parser.add_argument("--provider", choices=sorted(PROVIDER_BASES), default="groq")
+    parser.add_argument("--provider", choices=sorted(PROVIDER_BASES), default="openrouter")
     args = parser.parse_args()
 
-    if not TOKENS:
-        print("NO API TOKEN in env (GROQ_API_KEY_1/2 or OPENROUTER_API_KEY)")
+    tokens = _resolve_tokens(args.provider)
+    if not tokens:
+        print(f"NO API TOKEN for provider '{args.provider}' "
+              f"(set {', '.join(PROVIDER_KEY_VARS[args.provider])})")
         sys.exit(2)
-    token = TOKENS[args.token_idx % len(TOKENS)]
+    token = tokens[args.token_idx % len(tokens)]
     base_url = PROVIDER_BASES[args.provider]
+    global MODEL, PROXY
+    MODEL = os.environ.get("LOCAL_AGENT_MODEL") or DEFAULT_MODELS[args.provider]
+    PROXY = (os.environ.get("GROQ_PROXY", "") if args.provider == "groq"
+             else os.environ.get("OPENROUTER_PROXY", ""))
     EVAL_ROOT.mkdir(parents=True, exist_ok=True)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
