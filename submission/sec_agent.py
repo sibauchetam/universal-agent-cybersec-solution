@@ -200,6 +200,8 @@ class AgentState:
         # Rolling activity log (what was done/found) — given to the repair loop
         # so it inherits the main run's context instead of starting blind.
         self.activity: list[str] = []
+        # Deliverable path for budget-checkpoint nudges (set by orchestrator).
+        self.deliverable_hint: str = ""
 
     def act(self, line: str) -> None:
         self.activity.append(line[:200])
@@ -1058,11 +1060,44 @@ def _make_model() -> Any:
     return OpenAIChatModel(MODEL_NAME, provider=OpenAIProvider(openai_client=_make_openai_client()))
 
 
-def make_history_compactor(keep_last_returns: int = 2, max_return_chars: int = 600, max_text_chars: int = 400) -> Any:
+def make_history_compactor(
+    keep_last_returns: int = 2,
+    max_return_chars: int = 600,
+    max_text_chars: int = 400,
+    request_budget: int = 0,
+    deliverable: str = "",
+) -> Any:
     """pydantic-ai history processor: elides older tool outputs / assistant text so
     per-request input tokens stay bounded on long tasks (ACM paper: -20% tokens).
-    Defaults sized for ~7k-token ITPM ceilings seen on free inference tiers."""
-    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolReturnPart, TextPart
+    Defaults sized for ~7k-token ITPM ceilings seen on free inference tiers.
+
+    Also acts as a budget checkpoint: the processor runs before EVERY model
+    request, so it counts requests mechanically (no reliance on the model's
+    self-reporting) and injects wrap-up orders into the outgoing request when
+    thresholds are crossed. Injected messages live only in the outgoing
+    request payload (the processor's return value), not in the stored history,
+    so they never accumulate."""
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolReturnPart, TextPart, UserPromptPart
+
+    state_req_no = {"n": 0}
+
+    def _nudge() -> str | None:
+        if not request_budget or not deliverable:
+            return None
+        used = state_req_no["n"]
+        frac = used / float(request_budget)
+        if frac >= 0.78:
+            return (
+                f"[BUDGET CHECKPOINT {used}/{request_budget}] HARD DEADLINE. Do NOT run any more investigation tools. "
+                f"IMMEDIATELY call write_file(path='{deliverable}') with your CURRENT best values for every required field. "
+                f"Partial but well-formed output beats nothing. After writing, stop."
+            )
+        if frac >= 0.55:
+            return (
+                f"[BUDGET CHECKPOINT {used}/{request_budget}] Wrap up investigation. Confirm each remaining required "
+                f"field with at most 1-2 targeted commands, then WRITE the deliverable to '{deliverable}'."
+            )
+        return None
 
     def _shorten(content: Any, marker: str) -> str:
         text = content if isinstance(content, str) else str(content)
@@ -1098,6 +1133,16 @@ def make_history_compactor(keep_last_returns: int = 2, max_return_chars: int = 6
                         pass
                     new_parts.append(part)
                 msg.parts = new_parts
+        # Budget checkpoint: counts model requests mechanically (the processor
+        # runs before each one) and injects a wrap-up order into the OUTGOING
+        # request only — stored history stays clean, nothing accumulates.
+        state_req_no["n"] += 1
+        nudge = _nudge()
+        if nudge:
+            try:
+                return messages + [ModelRequest(parts=[UserPromptPart(content=nudge)])]
+            except Exception:
+                pass
         return messages
 
     return processor
@@ -1133,6 +1178,7 @@ async def run_pyai_loop(
     request_budget: int,
     baseline: str,
     compactor_kwargs: dict[str, int] | None = None,
+    deliverable: str = "",
 ) -> str:
     from pydantic_ai import Agent, UsageLimits
     from pydantic_ai.models.openai import OpenAIChatModelSettings
@@ -1144,7 +1190,7 @@ async def run_pyai_loop(
         retries=2,
         system_prompt=build_system_prompt(kind),
         model_settings=_model_settings(),
-        **_history_kwargs(make_history_compactor(**(compactor_kwargs or {}))),
+        **_history_kwargs(make_history_compactor(request_budget=request_budget, deliverable=deliverable, **(compactor_kwargs or {}))),
     )
 
     # Explicit signatures: pydantic-ai derives tool schemas from type hints,
@@ -1286,8 +1332,11 @@ async def run_openai_fallback(
             continue
         used = turn + 1
         left = request_budget - used
+        frac = used / float(request_budget) if request_budget else 0.0
         budget_marker = f"\n[sec-agent budget: {used}/{request_budget} LLM requests used, ~{left} left]"
-        if left <= max(4, request_budget // 4):
+        if frac >= 0.78:
+            budget_marker += "\n[sec-agent: HARD DEADLINE — write the deliverable NOW with current best values; partial but well-formed beats nothing.]"
+        elif left <= max(4, request_budget // 4):
             budget_marker += "\n[sec-agent: LOW BUDGET — stop exploring NOW. Write the deliverable with the information you already have.]"
         msg = choices[0].message
         if msg.content:
@@ -1333,6 +1382,13 @@ async def run_openai_fallback(
             except Exception as exc:
                 result = f"ERROR: tool raised {exc!r}"
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result[:TOOL_CHARS] + budget_marker})
+        if frac >= 0.78 and state.deliverable_hint:
+            # Hard wrap-up order as its own user turn — the per-tool marker is
+            # too easy for a small model to ignore at end of budget.
+            messages.append({"role": "user", "content":
+                f"[BUDGET CHECKPOINT {used}/{request_budget}] HARD DEADLINE. Do NOT run any more investigation tools. "
+                f"IMMEDIATELY call write_file(path='{state.deliverable_hint}') with your CURRENT best values for every "
+                f"required field. Then stop."})
     return final or "fallback loop ended"
 
 
@@ -1415,7 +1471,7 @@ async def ensure_deliverable(instruction: str, kind: str, state: AgentState, del
         + f"\n\nPREVIOUS RUN ACTIVITY (what was already done/found — do NOT repeat it, use it):\n{activity_tail[:6000]}"
     )
     try:
-        await run_pyai_loop(repair_instruction, kind, state, min(10, budget_left), "")
+        await run_pyai_loop(repair_instruction, kind, state, min(10, budget_left), "", deliverable=deliverable)
     except Exception as exc:
         import traceback as _tb
         _log("repair_loop_failed", error=repr(exc), tb=_tb.format_exc()[-2000:])
@@ -1493,6 +1549,7 @@ async def main_async(instruction: str) -> str:
             kind = kind2
             requests_used += 1
     deliverable = guess_deliverable(instruction, kind, state.workdir)
+    state.deliverable_hint = deliverable
     _log("classified", kind=kind, deliverable=deliverable)
 
     # 2) baseline tests for fix-type tasks (mechanical, free)
@@ -1512,6 +1569,7 @@ async def main_async(instruction: str) -> str:
                 instruction, kind, state, budget_main, baseline,
                 compactor_kwargs={"keep_last_returns": 2, "max_return_chars": 700, "max_text_chars": 500}
                 if aggressive else None,
+                deliverable=deliverable,
             )
             break
         except Exception as exc:
