@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -1211,7 +1212,13 @@ async def run_openai_fallback(
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
         )
-        msg = response.choices[0].message
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            # OpenRouter may return a 200 with choices=None when the upstream
+            # provider errors mid-request; retrying the same turn is correct.
+            _log("fallback_empty_choices")
+            continue
+        msg = choices[0].message
         if msg.content:
             final = msg.content
         if not msg.tool_calls:
@@ -1285,7 +1292,8 @@ async def classify_with_llm(instruction: str) -> str:
             temperature=0.0,
             max_tokens=8,
         )
-        word = (response.choices[0].message.content or "").strip().lower()
+        ch = getattr(response, "choices", None) or []
+        word = ((ch[0].message.content if ch else None) or "").strip().lower()
         for cand in ("audit", "fix", "forensics", "ctf", "generic"):
             if cand in word:
                 return cand
@@ -1429,7 +1437,8 @@ async def main_async(instruction: str) -> str:
             )
             break
         except Exception as exc:
-            _log("primary_loop_failed", error=repr(exc), attempt=attempt)
+            _log("primary_loop_failed", error=repr(exc), attempt=attempt,
+                 tb=traceback.format_exc()[-2000:])
             if "UsageLimitExceeded" in repr(exc) or "request_limit" in repr(exc):
                 _log("budget_exhausted", note="normal completion; proceeding to verification/repair")
                 break
@@ -1455,7 +1464,8 @@ async def main_async(instruction: str) -> str:
             try:
                 final = await run_openai_fallback(instruction, kind, state, min(budget_main, 30), baseline)
             except Exception as exc2:
-                _log("fallback_loop_failed", error=repr(exc2))
+                _log("fallback_loop_failed", error=repr(exc2),
+                     tb=traceback.format_exc()[-2000:])
                 final = final or f"agent failed: {exc2!r}"
             break
 
